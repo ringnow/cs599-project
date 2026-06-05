@@ -1,0 +1,61 @@
+version: '3.8'
+
+services:
+  # ── Backend: Streamlit UI + FastAPI ────────────────────────────────────
+  research-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cs599-research-agent-v2
+    ports:
+      - "8501:8501"   # Streamlit
+      - "8000:8000"   # FastAPI (optional)
+    env_file:
+      - .env
+    environment:
+      - STREAMLIT_SERVER_PORT=8501
+      - STREAMLIT_SERVER_ADDRESS=0.0.0.0
+      - STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
+    volumes:
+      - ./skills_library:/app/skills_library
+      - ~/.cs599-agent:/root/.cs599-agent  # Persist API keys
+      - ./research_outputs:/app/research_outputs
+    restart: unless-stopped
+    networks:
+      - agent-network
+
+  # ── Frontend: React + Vite dev server ─────────────────────────────────
+  frontend:
+    image: node:22-alpine
+    container_name: cs599-frontend
+    working_dir: /app
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules  # anonymous volume to avoid overwriting
+    command: sh -c "npm install && npx vite --host 0.0.0.0 --port 5173"
+    depends_on:
+      - research-agent
+    networks:
+      - agent-network
+    profiles:
+      - dev  # Only start with: docker compose --profile dev up
+
+  # ── Ollama (local models, optional) ───────────────────────────────────
+  # ollama:
+  #   image: ollama/ollama:latest
+  #   container_name: cs599-ollama
+  #   ports:
+  #     - "11434:11434"
+  #   volumes:
+  #     - ollama-data:/root/.ollama
+  #   networks:
+  #     - agent-network
+
+networks:
+  agent-network:
+    driver: bridge
+
+volumes:
+  ollama-data:

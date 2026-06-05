@@ -1,0 +1,67 @@
+@import "tailwindcss";
+
+/* Global reset for full-screen layout */
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(156, 163, 175, 0.3);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(156, 163, 175, 0.5);
+}
+
+/* Animations */
+@keyframes flow-dot {
+  0% {
+    offset-distance: 0%;
+  }
+  100% {
+    offset-distance: 100%;
+  }
+}
+
+.animate-flow-dot {
+  animation: flow-dot 3s linear infinite;
+}
+
+@keyframes pulse-wave {
+  0%, 100% {
+    transform: scaleY(0.4);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+.pulse-bar-1 {
+  animation: pulse-wave 1s ease-in-out infinite alternate;
+}
+.pulse-bar-2 {
+  animation: pulse-wave 0.8s ease-in-out infinite alternate;
+  animation-delay: 0.2s;
+}
+.pulse-bar-3 {
+  animation: pulse-wave 1.2s ease-in-out infinite alternate;
+  animation-delay: 0.4s;
+}
+

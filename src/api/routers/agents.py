@@ -1,0 +1,132 @@
+"""POST /api/agents-collaborate — Multi-agent collaboration."""
+from datetime import datetime
+
+from fastapi import APIRouter
+from src.models.manager import get_model_manager
+from src.models.key_store import get_key_store
+from src.api.schemas import AgentCollaborateRequest, ApiResponse
+
+router = APIRouter()
+
+
+def _provider_model(req_provider: str = "", req_model: str = ""):
+    """Get provider & model — prefer request params, then configured default."""
+    mgr = get_model_manager()
+    if req_provider:
+        p = mgr.get_provider(req_provider)
+        if p:
+            return p.config.name, req_model or p.config.default_model or "deepseek-chat"
+    default = mgr.default_provider
+    if default:
+        cfg = next((c for c in mgr.list_providers() if c.name == default), None)
+        if cfg:
+            return cfg.name, cfg.default_model or "deepseek-chat"
+    providers = mgr.list_providers()
+    if providers:
+        p = providers[0]
+        return p.name, p.default_model or "deepseek-chat"
+    return "deepseek", "deepseek-chat"
+
+
+def _has_api_key(provider_name: str) -> bool:
+    """Check if provider has a valid API key configured."""
+    ks = get_key_store()
+    key = ks.get_key(provider_name)
+    return bool(key and key.strip() and key.strip() != "no-key" and key.strip() != "YOUR_API_KEY")
+
+
+def _demo_collaboration(topic: str):
+    """Return demo collaboration data when no API key is configured."""
+    exchange = [
+        {
+            "agent": "搜索专家 (Search Expert)",
+            "message": f"我已接入高引数据库，关于「{topic}」，已检索到ICML 2025、CVPR 2025的最新预印本32篇。关键文献主要集中在异构拓扑网络下的分布式收敛问题，已成功提炼出两个主流技术路线：全连通异步网络与星型有向对齐环。"
+        },
+        {
+            "agent": "分析助手 (Analysis Assistant)",
+            "message": "根据搜索专家提供的信息，我对这两种模型进行了复杂度分析。异步全连通网络虽然收敛上限极高，但通信开销达到对数立方级 O(N^3 log N)；而有向对齐环在牺牲5%收敛精度的同时，将每次迭代的吞吐代价平抑到了线性级 O(N)。因此在可拓展架构中，首推后一方案。"
+        },
+        {
+            "agent": "写作专家 (Writing Expert)",
+            "message": "收到。我将整理分析助手给出的复杂度比对结果。综述引言及理论设计部分，我们可以以定理（Theorem 1.1）的形式严格列出不同拓扑结构的流形流收敛界限，并以 LaTeX 数式和图表对比呈现，生成一份完整的学术方案草案。"
+        }
+    ]
+    markdown = f"""### **多智能体协同输出：关于《{topic}》的可行性方案**
+
+本方案由 **搜索专家**、**分析助手** 与 **写作专家** 自主完成多轮博弈交流得出：
+
+#### **1. 拓扑复杂度对比矩阵**
+| 拓扑结构 | 关键代表发布 | 核心优势 | 瓶颈 | 通信时空复杂度 |
+| :--- | :--- | :--- | :--- | :--- |
+| **异步全连通 (Fully Connected)** | Zhang et al. (ICML '25) | 高稳定性、全局收敛 | 极端通信损耗 | O(N^3 log N) |
+| **有向对齐环 (Directed Alignment)** | CS599 (NeurIPS '25) | 有限开销、线性拓展 | 存在收敛时滞 | O(N) |
+
+#### **2. 协同成果总结**
+在分布式系统中，推荐采用**有向自适应对齐环**架构，由于各计算智能体本地只需存储与其相邻的拓扑状态矢量。系统整体可用性得到了质的飞跃。
+
+#### **3. 文献引用目录**
+- *Ref-A*: "Asynchronous Multi-Agent Convergence Topologies." *ICML*, 2025.
+- *Ref-B*: "Linear Complexity in Directed Consensus Systems." *NeurIPS*, 2025.
+
+---
+
+> 提示：请在「服务商管理」中配置有效的 API Key 以启用实时的多智能体协作功能。
+"""
+    return exchange, markdown
+
+
+@router.post("/api/agents-collaborate", response_model=ApiResponse)
+def agents_collaborate(req: AgentCollaborateRequest):
+    try:
+        provider, model = _provider_model(req.provider, req.model)
+        logs = [
+            "正在启动多智能体协作网络...",
+            f"任务主题: {req.topic[:60]}",
+            f"文档类型: {req.doc_type}, 迭代轮数: {req.iterations}",
+        ]
+
+        # Check API key before any LLM calls
+        if not _has_api_key(provider):
+            logs.append("未检测到 API Key，切换至演示模式")
+            exchange, markdown = _demo_collaboration(req.topic)
+            return ApiResponse(logs=logs, markdown=markdown, exchange=exchange)
+
+        from src.crew.crew import Crew
+        crew = Crew(provider_name=provider, model_id=model)
+        result = crew.run_sequential(req.topic, doc_type=req.doc_type, max_iterations=req.iterations, context=req.context or "")
+
+        # Build exchange from workflow log (from result dict)
+        exchange = []
+        workflow_log = result.get("workflow_log", [])
+        for entry in workflow_log:
+            agent_map = {
+                "researcher": "搜索专家 (Search Expert)",
+                "critic": "分析助手 (Analysis Assistant)",
+                "writer": "写作专家 (Writing Expert)",
+            }
+            agent_name = entry.get("agent", "")
+            agent_label = agent_map.get(agent_name, agent_name)
+            message = entry.get("message", "")
+            if message:
+                exchange.append({"agent": agent_label, "message": message})
+
+        document = result.get("document", "")
+        logs.append("多智能体协作完成！")
+        from src.api.routers.history import save_report
+        save_report("agents", req.topic, document)
+
+        return ApiResponse(
+            logs=logs,
+            markdown=document,
+            exchange=exchange if exchange else None,
+        )
+    except Exception as e:
+        logs = [
+            "正在启动多智能体协作网络...",
+            f"任务主题: {req.topic[:60]}",
+            f"❌ 多智能体协作出错: {str(e)[:200]}",
+        ]
+        return ApiResponse(
+            logs=logs,
+            markdown=f"### ⚠️ 多智能体协作失败\n\n**错误**: {str(e)[:500]}\n\n请检查服务商配置后重试。",
+        )

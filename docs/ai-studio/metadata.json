@@ -1,0 +1,6 @@
+{
+  "name": "CS599 科研学术助手",
+  "description": "基于 CS599 系统构建的学术助手。提供智能问答、研究报告、大纲生成、学术论文、综述写作及多智能体协作等学术研究工具。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

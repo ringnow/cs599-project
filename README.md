@@ -1,0 +1,237 @@
+# CS599 智能研究助手 v2
+
+**多模型 · 多智能体 · 技能系统**
+
+Agentic AI 研究助手，支持多模型切换、多智能体协作和插件化技能系统，可生成调研报告、辅助论文构思、撰写学术论文。
+
+## v2 新特性
+
+| 特性 | v1 | v2 |
+|------|-----|-----|
+| 模型支持 | 仅 DeepSeek | **任意 OpenAI 兼容 API + Ollama 本地模型** |
+| 模型选择 | 固定 | **从 Base URL 自动发现** |
+| 密钥存储 | .env 明文 | **AES-256 本地加密** |
+| 智能体架构 | 单智能体 | **多智能体协作 (研究员+审查员+撰稿人)** |
+| 论文构思 | 无 | **调研报告 → 论文大纲+创新点+写作建议** |
+| 输出类型 | 调研报告 | **调研报告 / 论文构思 / 学术论文 / 综述** |
+| 扩展性 | 固定 | **技能插件系统** |
+
+## 技术栈
+
+| 组件 | 技术 |
+|------|------|
+| 智能体框架 | LangGraph (ReAct) + CrewAI 模式 |
+| 多模型管理 | 自定义 ModelManager（OpenAI 兼容） |
+| 技能系统 | 插件化 Registry |
+| 密钥安全 | cryptography (AES-128-CBC + PBKDF2) |
+| 协议 | MCP (Model Context Protocol) |
+| UI | React + Vite (原 Streamlit 已替换) |
+| 学术搜索 | Semantic Scholar API + BoCha/Brave |
+| 容器 | Docker + Docker Compose |
+
+## 致谢
+
+文献检索功能由 [Semantic Scholar](https://www.semanticscholar.org/) 提供支持。
+
+## 快速开始
+
+### 1. 安装
+
+```bash
+git clone <你的仓库地址>
+cd cs599-project
+cp .env.example .env
+pip install -r requirements.txt
+```
+
+### 2. 配置 API 密钥
+
+**方式一：Web 界面（推荐）**
+- 启动应用后，在侧边栏「API 密钥管理」中输入密钥
+- 密钥自动加密存储在 `~/.cs599-agent/`，随仓库提交
+
+**方式二：环境变量**
+```bash
+export DEEPSEEK_API_KEY=你的密钥
+```
+
+### 3. 启动
+
+```bash
+# 后端 API 服务（必需）
+uvicorn src.api.server:app --reload --port 8000
+# 打开 http://localhost:8000
+
+# 前端开发（可选，用于前端开发调试）
+cd frontend && npm install && npm run dev
+# 打开 http://localhost:5173（自动代理 API 到 :8000）
+
+# 旧版 Streamlit 界面（已废弃，由 React 前端替代）
+# streamlit run src/app.py
+
+# 命令行
+python src/run_cli.py "研究主题" --skill research
+python src/run_cli.py "论文主题" --skill paper_writing
+
+# Docker
+docker-compose up --build
+```
+
+## 工作模式
+
+### 🔍 调研报告
+深度研究任意主题，自动搜索网络与学术文献（Semantic Scholar），生成结构化调研报告。
+
+### 💡 论文构思
+先进行深度调研生成报告，再基于报告为你构思：
+- 选题价值分析
+- 建议论文大纲
+- 创新点建议
+- 关键参考文献
+- 写作建议
+
+> 用户可以先生成调研报告，阅读后构思自己的论文，助手提供框架建议。
+
+### 📄 学术论文
+直接生成包含以下章节的完整学术论文：
+- 摘要 (Abstract)
+- 引言 (Introduction)
+- 相关工作 (Related Work)
+- 方法 (Methodology)
+- 实验 (Experiments)
+- 结论 (Conclusion)
+- 参考文献 (References)
+
+### 📊 综述撰写
+生成带有分类法（Taxonomy）和对比表的领域综述文档。
+
+### 👥 智能体协作
+三个专业智能体协作完成任务：
+1. **研究员** → 信息收集与分析
+2. **审查员** → 质量检查与验证
+3. **撰稿人** → 文档撰写与润色
+
+### 🧰 技能管理
+浏览和管理研究技能，支持安装自定义技能。
+
+## 添加自定义模型
+
+### 通过界面
+1. 选择「自定义」服务商
+2. 输入 Base URL（如 `https://api.example.com/v1`）
+3. 点击「自动发现模型」或手动输入模型 ID
+4. 保存 API 密钥
+
+### 代码方式
+```python
+from src.models.manager import get_model_manager
+from src.models.provider import ProviderConfig, ProviderType
+
+manager = get_model_manager()
+manager.add_provider(ProviderConfig(
+    name="myprovider",
+    display_name="我的服务商",
+    type=ProviderType.OPENAI_COMPATIBLE,
+    base_url="https://api.example.com/v1",
+    default_model="gpt-4",
+))
+manager.set_api_key("myprovider", "你的密钥")
+```
+
+## 添加自定义技能
+
+将 Python 文件放入 `skills_library/` 目录即可自动加载：
+
+```python
+# skills_library/my_skill.py
+from src.skills.base import BaseSkill, SkillResult, SkillContext
+
+class MySkill(BaseSkill):
+    name = "my_skill"
+    display_name = "我的技能"
+    description = "描述"
+    tags = ["custom", "research"]
+
+    def execute(self, context: SkillContext) -> SkillResult:
+        # 你的实现
+        return SkillResult(success=True, content="结果")
+```
+
+## 目录结构
+
+```
+cs599-project/
+├── src/                        # Python 后端
+│   ├── api/                    # FastAPI REST API
+│   │   ├── server.py           # 主服务入口
+│   │   ├── schemas.py          # Pydantic 数据模型
+│   │   ├── cancel.py           # 请求取消支持
+│   │   └── routers/            # 路由模块
+│   │       ├── agents.py       # 多智能体协作
+│   │       ├── assistant.py    # 智能助手
+│   │       ├── generation.py   # 报告/大纲/论文/综述生成
+│   │       ├── history.py      # 历史记录（持久化存储）
+│   │       ├── mcp.py          # MCP 协议
+│   │       ├── providers.py    # 模型供应商管理
+│   │       ├── search.py       # 搜索 API Key 管理
+│   │       └── skills.py       # 技能管理
+│   ├── models/                  # 多模型管理
+│   │   ├── manager.py           # ModelManager
+│   │   ├── provider.py          # Provider 配置 + 模型发现
+│   │   └── key_store.py         # AES-256 加密存储
+│   ├── skills/                  # 技能插件系统
+│   │   ├── base.py              # BaseSkill
+│   │   ├── registry.py          # 注册表
+│   │   └── builtin/             # 内置技能
+│   │       ├── research_skill.py
+│   │       ├── paper_skill.py
+│   │       ├── survey_skill.py
+│   │       ├── code_review_skill.py
+│   │       └── literature_review_skill.py
+│   ├── crew/                    # 多智能体协作
+│   │   ├── agent.py             # 智能体定义
+│   │   └── crew.py              # 协调器
+│   ├── agent/                   # 核心工具
+│   │   ├── tools.py             # 搜索/提取工具
+│   │   └── state.py             # 状态定义
+│   ├── mcp/                     # MCP 协议管理
+│   │   └── manager.py
+│   ├── app.py                   # Streamlit 界面入口
+│   ├── run_cli.py               # 命令行入口
+│   ├── config.py                # 配置
+│   └── requirements.txt         # Python 依赖
+├── frontend/                    # React 前端 (Vite)
+│   ├── src/
+│   │   ├── App.tsx
+│   │   ├── main.tsx
+│   │   ├── types.ts
+│   │   └── index.css
+│   ├── server.ts                # Express 服务器 (Gemini)
+│   ├── vite.config.ts
+│   ├── tsconfig.json
+│   └── package.json
+├── skills_library/              # 用户自定义技能目录
+├── docs/                        # 文档
+│   ├── report.md                # 大作业报告
+│   ├── ai-studio/               # Google AI Studio 配置
+│   └── notes/                   # 开发笔记
+├── .env.example
+├── .gitignore
+├── .dockerignore
+├── Dockerfile
+├── docker-compose.yml
+└── README.md
+```
+
+## 密钥安全说明
+
+API 密钥使用 **AES-256-CBC** 加密存储在 `~/.cs599-agent/api_keys.enc`：
+- 加密密钥通过 PBKDF2 从机器标识（用户名+主机名）派生
+- 换机器无法解密，防止密钥泄露
+- 100,000 次 PBKDF2 迭代增加暴力破解成本
+
+**切勿将密钥提交到 Git！** `.env` 和 `~/.cs599-agent/` 已加入 `.gitignore`。
+
+## 许可证
+
+MIT License（如为公开仓库）
