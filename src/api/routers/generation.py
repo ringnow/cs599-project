@@ -8,36 +8,11 @@ from src.models.key_store import get_key_store
 from src.skills.registry import get_skill_registry
 from src.skills.base import SkillContext
 from src.api.schemas import ReportRequest, OutlineRequest, ThesisRequest, ReviewRequest, ApiResponse
+from src.api.dependencies import resolve_provider_model, has_api_key
 import asyncio
 import concurrent.futures
 
 router = APIRouter()
-
-
-def _provider_model(req_provider: str = "", req_model: str = ""):
-    """Get provider & model — prefer request params, then configured default."""
-    mgr = get_model_manager()
-    if req_provider:
-        p = mgr.get_provider(req_provider)
-        if p:
-            return p.config.name, req_model or p.config.default_model or "deepseek-chat"
-    default = mgr.default_provider
-    if default:
-        cfg = next((c for c in mgr.list_providers() if c.name == default), None)
-        if cfg:
-            return cfg.name, cfg.default_model or "deepseek-chat"
-    providers = mgr.list_providers()
-    if providers:
-        p = providers[0]
-        return p.name, p.default_model or "deepseek-chat"
-    return "deepseek", "deepseek-chat"
-
-
-def _has_api_key(provider_name: str) -> bool:
-    """Check if provider has a valid API key configured."""
-    ks = get_key_store()
-    key = ks.get_key(provider_name)
-    return bool(key and key.strip() and key.strip() != "no-key" and key.strip() != "YOUR_API_KEY")
 
 
 def _mcp_context(mcp_servers: List[str], topic: str) -> tuple:
@@ -180,9 +155,9 @@ async def report(req: ReportRequest):
 async def outline(req: OutlineRequest):
     logs = ["正在调研相关领域...", "正在进行论文构思..."]
     try:
-        provider, model = _provider_model(req.provider, req.model)
+        provider, model = resolve_provider_model(req.provider, req.model)
 
-        if not _has_api_key(provider):
+        if not has_api_key(provider):
             logs.append("未检测到 API Key，切换至演示模式")
             return ApiResponse(logs=logs, markdown=_demo_content(req.subject, "outline"))
 
@@ -224,15 +199,15 @@ async def thesis(req: ThesisRequest):
     style = style_map.get(req.style, req.style)
     logs = ["正在分析章节控制变量与技术深度...", "开始生成学术段落..."]
     try:
-        provider, model = _provider_model(req.provider, req.model)
+        provider, model = resolve_provider_model(req.provider, req.model)
 
-        if not _has_api_key(provider):
+        if not has_api_key(provider):
             logs.append("未检测到 API Key，切换至演示模式")
             return ApiResponse(logs=logs, markdown=_demo_content(req.blockTitle, "thesis"))
 
         sections = req.sections or ["abstract", "introduction", "methodology", "experiments", "conclusion"]
         actual = req.skill_override if req.skill_override else "paper_writing"
-        content = await _execute_skill_with_timeout(actual, req.blockTitle, provider, model, {
+        content, _steps = await _execute_skill_with_timeout(actual, req.blockTitle, provider, model, {
             "paper_type": req.paper_type or "research",
             "style": style,
             "length": req.length or "medium",
@@ -253,14 +228,14 @@ async def thesis(req: ThesisRequest):
 async def literature_review(req: ReviewRequest):
     logs = [f"开始扫描关于 [{req.keyword}] 的学术文献..."]
     try:
-        provider, model = _provider_model(req.provider, req.model)
+        provider, model = resolve_provider_model(req.provider, req.model)
 
-        if not _has_api_key(provider):
+        if not has_api_key(provider):
             logs.append("未检测到 API Key，切换至演示模式")
             return ApiResponse(logs=logs, markdown=_demo_content(req.keyword, "literature-review"))
 
         actual = req.skill_override if req.skill_override else "survey_writing"
-        content = await _execute_skill_with_timeout(actual, req.keyword, provider, model, {
+        content, _steps = await _execute_skill_with_timeout(actual, req.keyword, provider, model, {
             "scope": req.scope or "focused",
             "taxonomy": req.taxonomy,
             "comparisons": req.comparisons,

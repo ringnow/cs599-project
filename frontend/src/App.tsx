@@ -31,6 +31,11 @@ import {
   HelpCircle
 } from "lucide-react";
 import { Tab, HistoryItem, SkillItem } from "./types";
+import { MarkdownRenderer } from "./components/MarkdownRenderer";
+import { ContextAccordion } from "./components/ContextAccordion";
+import { ProviderSelector } from "./components/ProviderSelector";
+import { SkillSelector } from "./components/SkillSelector";
+import { LogPanel } from "./components/LogPanel";
 
 export default function App() {
   // Navigation & Base States
@@ -540,113 +545,7 @@ export default function App() {
     }
   };
 
-  // Render provider/model selector (shared across tabs)
-  const renderProviderSelector = () => (
-    <div className="flex gap-2 items-center">
-      <div className="flex-1">
-        <select
-          value={selectedProvider}
-          onChange={e => handleProviderChange(e.target.value)}
-          className="w-full text-[11px] p-2 border rounded-lg bg-slate-50/50 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-        >
-          <option value="">-- 默认供应商 --</option>
-          {providersList.map((p: any) => (
-            <option key={p.name} value={p.name}>{p.display_name}</option>
-          ))}
-        </select>
-      </div>
-      {selectedProvider && (
-        <div className="flex-1">
-          <select
-            value={selectedModel}
-            onChange={e => setSelectedModel(e.target.value)}
-            className="w-full text-[11px] p-2 border rounded-lg bg-slate-50/50 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-          >
-            {(() => {
-              const p = providersList.find((x: any) => x.name === selectedProvider);
-              const models = sniffedModels.length > 0 ? sniffedModels : (p ? [{ id: p.default_model || 'default' }] : []);
-              return models.map((m: any) => (
-                <option key={m.id} value={m.id}>{m.id}</option>
-              ));
-            })()}
-          </select>
-        </div>
-      )}
-    </div>
-  );
 
-  // Render context accordion (shared across tabs)
-  const renderContextAccordion = (
-    expanded: boolean, setExpanded: any,
-    context: string, setContext: any,
-    files: Array<{ name: string; size: string; content: string }>, setFiles: any,
-    removeFile: any,
-    historyId: string, setHistoryId: any,
-  ) => (
-    <div className="border border-gray-200 rounded-2xl bg-white shadow-sm overflow-hidden transition-all">
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center justify-between px-5 py-4 text-xs font-semibold text-gray-700 hover:bg-slate-50/50 transition-colors bg-slate-50/30"
-      >
-        <div className="flex items-center gap-2 text-indigo-600">
-          <Layers className="w-4 h-4" />
-          <span>补充上下文</span>
-        </div>
-        {expanded ? <ChevronUp className="w-4 h-4 text-gray-500" /> : <ChevronDown className="w-4 h-4 text-gray-500" />}
-      </button>
-      {expanded && (
-        <div className="p-5 border-t border-gray-100 space-y-4">
-          <div
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={(e) => handleFileDropTab(e, setFiles, setContext)}
-            className="border-2 border-dashed border-gray-200 hover:border-indigo-400 bg-slate-50/20 hover:bg-slate-50/70 p-5 rounded-xl text-center cursor-pointer transition-all relative group"
-          >
-            <Upload className="w-6 h-6 text-gray-400 mx-auto mb-2 group-hover:scale-110 group-hover:text-indigo-500 transition-transform" />
-            <span className="block text-[11px] font-semibold text-gray-700 mb-1">拖入文件作为上下文</span>
-            <span className="block text-[10px] text-gray-400">支持 .txt .md .py .json .csv 等文本文件</span>
-          </div>
-          {files.length > 0 && (
-            <div className="space-y-1.5">
-              {files.map((file, fIdx) => (
-                <div key={fIdx} className="flex items-center justify-between bg-slate-50 border p-2 rounded-lg text-[10px] text-gray-600 font-mono">
-                  <span className="truncate max-w-[200px]" title={file.name}>{file.name}</span>
-                  <div className="flex items-center gap-2">
-                    <span className="text-gray-400">{file.size}</span>
-                    <button onClick={() => removeFile(fIdx)} className="p-0.5 rounded hover:bg-gray-200 text-rose-500">
-                      <X className="w-3 h-3" />
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-          {historyReports.length > 0 && (
-            <div className="bg-slate-50/50 border border-gray-100 rounded-xl p-3">
-              <label className="block text-[9px] font-bold text-gray-500 uppercase tracking-wider mb-1.5">选择历史记录作为上下文</label>
-              <div className="flex flex-wrap gap-2 items-center">
-                <select value={historyId} onChange={e => setHistoryId(e.target.value)} className="min-w-0 flex-1 text-[11px] p-2 border rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500">
-                  <option value="">-- 选择 --</option>
-                  {historyReports.map((h: any) => (
-                    <option key={h.id} value={h.id}>[{h.mode}] {h.display_name}</option>
-                  ))}
-                </select>
-                <button onClick={() => loadHistoryToContextTab(historyId, setContext)} className="whitespace-nowrap shrink-0 text-[10px] font-semibold text-white bg-indigo-600 border border-indigo-500 px-4 py-2 rounded-lg hover:bg-indigo-700">加载</button>
-              </div>
-            </div>
-          )}
-          <div>
-            <label className="block text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-1.5">追加学术资料：</label>
-            <textarea
-              value={context}
-              onChange={(e) => setContext(e.target.value)}
-              placeholder="在此处输入额外的文献引用、数据序列..."
-              className="w-full h-24 text-xs p-3 border rounded-xl bg-slate-50/55 focus:bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-sans leading-relaxed"
-            />
-          </div>
-        </div>
-      )}
-    </div>
-  );
 
   // Helper: Assemble request headers
   const getRequestHeaders = () => {
@@ -926,163 +825,7 @@ export default function App() {
     }
   }
 
-  // Helper component to display beautifully parsed Chinese markdown styling inside a customized elegant card
-  const MarkdownRenderer = ({ text }: { text: string }) => {
-    if (!text) return null;
-
-    // A fast, elegant line parser that formats Headings, list bullets, code blocks, tables and quotes inside beautiful UI containers
-    const lines = text.split("\n");
-    let insideCodeBlock = false;
-    let codeBlockLines: string[] = [];
-    let insideTable = false;
-    let tableHeadings: string[] = [];
-    let tableRows: string[][] = [];
-
-    const elements: React.ReactNode[] = [];
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-
-      // Code block start/end toggle
-      if (line.trim().startsWith("```")) {
-        if (insideCodeBlock) {
-          insideCodeBlock = false;
-          const codeText = codeBlockLines.join("\n");
-          elements.push(
-            <div key={`code-${i}`} className="my-3 font-mono text-xs overflow-x-auto bg-[#1E293B] text-slate-100 p-4 border-l-4 border-cyan-500 rounded-r-xl shadow-inner relative group">
-              <div className="absolute top-2 right-2 text-[10px] uppercase bg-slate-800 text-slate-400 px-2 py-0.5 rounded font-sans select-none opacity-0 group-hover:opacity-100 transition-opacity">
-                代码片段
-              </div>
-              <pre>{codeText}</pre>
-            </div>
-          );
-          codeBlockLines = [];
-        } else {
-          insideCodeBlock = true;
-        }
-        continue;
-      }
-
-      if (insideCodeBlock) {
-        codeBlockLines.push(line);
-        continue;
-      }
-
-      // Read markdown formatted table structures
-      if (line.trim().startsWith("|") && line.trim().endsWith("|")) {
-        const columns = line.split("|").slice(1, -1).map(col => col.trim());
-        
-        // Skip separator line (-|---|-)
-        if (columns.every(col => col === "" || col.startsWith("---") || col.startsWith(":-") || col.startsWith("-:"))) {
-          continue;
-        }
-
-        if (!insideTable) {
-          insideTable = true;
-          tableHeadings = columns;
-          tableRows = [];
-        } else {
-          tableRows.push(columns);
-        }
-        continue;
-      } else {
-        if (insideTable) {
-          insideTable = false;
-          const currentTableIndex = i;
-          elements.push(
-            <div key={`table-${i}`} className="my-4 overflow-x-auto border border-gray-200 rounded-xl bg-white shadow-sm">
-              <table className="w-full text-left text-xs border-collapse">
-                <thead>
-                  <tr className="bg-gray-50 border-b border-gray-200">
-                    {tableHeadings.map((head, hIdx) => (
-                      <th key={`h-${hIdx}`} className="py-3 px-4 font-semibold text-gray-700">{head}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {tableRows.map((row, rIdx) => (
-                    <tr key={`r-${rIdx}`} className="hover:bg-slate-50/55 transition-colors">
-                      {row.map((val, cIdx) => (
-                        <td key={`c-${cIdx}`} className="py-2.5 px-4 text-gray-600 font-sans leading-relaxed">{val}</td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          );
-        }
-      }
-
-      // Standard headings
-      if (line.startsWith("### ")) {
-        elements.push(
-          <h3 key={i} className="text-sm font-semibold text-gray-800 mt-6 mb-3 flex items-center gap-2 border-b border-gray-100 pb-1.5 font-sans tracking-wide">
-            <span className="w-1.5 h-4 bg-indigo-500 rounded-sm inline-block"></span>
-            {line.replace("### ", "")}
-          </h3>
-        );
-      } else if (line.startsWith("#### ")) {
-        elements.push(
-          <h4 key={i} className="text-xs font-semibold text-gray-700 mt-4 mb-2 font-sans tracking-wide">
-            {line.replace("#### ", "")}
-          </h4>
-        );
-      } else if (line.startsWith("## ")) {
-        elements.push(
-          <h2 key={i} className="text-base font-bold text-gray-900 mt-8 mb-4 border-b pb-2 font-sans tracking-wide">
-            {line.replace("## ", "")}
-          </h2>
-        );
-      } else if (line.startsWith("# ")) {
-        elements.push(
-          <h1 key={i} className="text-lg font-bold text-gray-950 mt-10 mb-6 font-sans tracking-tight">
-            {line.replace("# ", "")}
-          </h1>
-        );
-      }
-      // Bullet lists
-      else if (line.startsWith("- ") || line.startsWith("* ")) {
-        elements.push(
-          <li key={i} className="ml-5 list-disc text-xs text-gray-600 leading-relaxed my-1.5 font-sans">
-            {line.substring(2)}
-          </li>
-        );
-      }
-      // Index lists
-      else if (/^\d+\.\s/.test(line)) {
-        const dotIdx = line.indexOf(". ");
-        elements.push(
-          <div key={i} className="ml-4 flex gap-2 items-start text-xs text-gray-600 leading-relaxed my-1.5 font-sans">
-            <span className="font-semibold text-indigo-500 min-w-4 select-none">{line.substring(0, dotIdx + 1)}</span>
-            <span>{line.substring(dotIdx + 2)}</span>
-          </div>
-        );
-      }
-      // Quotes
-      else if (line.startsWith("> ")) {
-        elements.push(
-          <blockquote key={i} className="pl-4 border-l-4 border-indigo-400 bg-indigo-50/40 py-2 my-3 rounded-r-xl text-xs text-indigo-900 font-sans italic leading-relaxed">
-            {line.replace("> ", "")}
-          </blockquote>
-        );
-      }
-      // Empty lines
-      else if (line.trim() === "") {
-        continue;
-      }
-      // Regular text paragraphs
-      else {
-        elements.push(
-          <p key={i} className="text-xs text-gray-600 leading-relaxed font-sans my-2.5">
-            {line}
-          </p>
-        );
-      }
-    }
-
-    return <div className="space-y-1">{elements}</div>;
-  };
+  // (MarkdownRenderer moved to components/MarkdownRenderer.tsx)
 
   // Load history report from backend API into context
   const [selectedHistoryId, setSelectedHistoryId] = useState<string>("");
@@ -1396,9 +1139,9 @@ export default function App() {
                   </p>
                 </div>
 
-                {renderContextAccordion(isContextExpanded, setIsContextExpanded, contextText, setContextText, uploadedFiles, setUploadedFiles, removeUploadedFile, selectedHistoryId, setSelectedHistoryId)}
+                <ContextAccordion expanded={isContextExpanded} setExpanded={setIsContextExpanded} context={contextText} setContext={setContextText} files={uploadedFiles} setFiles={setUploadedFiles} removeFile={removeUploadedFile} historyId={selectedHistoryId} setHistoryId={setSelectedHistoryId} historyReports={historyReports} onLoadHistory={loadHistoryToContextTab} />
 
-                {renderProviderSelector()}
+                <ProviderSelector selectedProvider={selectedProvider} onProviderChange={handleProviderChange} selectedModel={selectedModel} onModelChange={setSelectedModel} providersList={providersList} sniffedModels={sniffedModels} />
 
                 {/* Main Action Input Panel */}
                 <div className="space-y-4">
@@ -1565,9 +1308,9 @@ export default function App() {
                   </div>
                 </div>
 
-                {renderProviderSelector()}
+                <ProviderSelector selectedProvider={selectedProvider} onProviderChange={handleProviderChange} selectedModel={selectedModel} onModelChange={setSelectedModel} providersList={providersList} sniffedModels={sniffedModels} />
 
-                {renderContextAccordion(reportContextExpanded, setReportContextExpanded, reportContext, setReportContext, reportFiles, setReportFiles, removeReportFile, reportHistoryId, setReportHistoryId)}
+                <ContextAccordion expanded={reportContextExpanded} setExpanded={setReportContextExpanded} context={reportContext} setContext={setReportContext} files={reportFiles} setFiles={setReportFiles} removeFile={removeReportFile} historyId={reportHistoryId} setHistoryId={setReportHistoryId} historyReports={historyReports} onLoadHistory={loadHistoryToContextTab} />
 
                 {/* Skill selector */}
                 <div className="border border-gray-200 rounded-2xl bg-white p-4 shadow-sm">
@@ -1637,9 +1380,9 @@ export default function App() {
                   </select>
                 </div>
 
-                {renderProviderSelector()}
+                <ProviderSelector selectedProvider={selectedProvider} onProviderChange={handleProviderChange} selectedModel={selectedModel} onModelChange={setSelectedModel} providersList={providersList} sniffedModels={sniffedModels} />
 
-                {renderContextAccordion(outlineContextExpanded, setOutlineContextExpanded, outlineContext, setOutlineContext, outlineFiles, setOutlineFiles, removeOutlineFile, outlineHistoryId, setOutlineHistoryId)}
+                <ContextAccordion expanded={outlineContextExpanded} setExpanded={setOutlineContextExpanded} context={outlineContext} setContext={setOutlineContext} files={outlineFiles} setFiles={setOutlineFiles} removeFile={removeOutlineFile} historyId={outlineHistoryId} setHistoryId={setOutlineHistoryId} historyReports={historyReports} onLoadHistory={loadHistoryToContextTab} />
 
                 {/* Skill selector */}
                 <div className="border border-gray-200 rounded-2xl bg-white p-4 shadow-sm">
@@ -1737,9 +1480,9 @@ export default function App() {
                   </div>
                 </div>
 
-                {renderProviderSelector()}
+                <ProviderSelector selectedProvider={selectedProvider} onProviderChange={handleProviderChange} selectedModel={selectedModel} onModelChange={setSelectedModel} providersList={providersList} sniffedModels={sniffedModels} />
 
-                {renderContextAccordion(thesisContextExpanded, setThesisContextExpanded, thesisContext, setThesisContext, thesisFiles, setThesisFiles, removeThesisFile, thesisHistoryId, setThesisHistoryId)}
+                <ContextAccordion expanded={thesisContextExpanded} setExpanded={setThesisContextExpanded} context={thesisContext} setContext={setThesisContext} files={thesisFiles} setFiles={setThesisFiles} removeFile={removeThesisFile} historyId={thesisHistoryId} setHistoryId={setThesisHistoryId} historyReports={historyReports} onLoadHistory={loadHistoryToContextTab} />
 
                 {/* Skill selector */}
                 <div className="border border-gray-200 rounded-2xl bg-white p-4 shadow-sm">
@@ -1820,9 +1563,9 @@ export default function App() {
                   </div>
                 </div>
 
-                {renderProviderSelector()}
+                <ProviderSelector selectedProvider={selectedProvider} onProviderChange={handleProviderChange} selectedModel={selectedModel} onModelChange={setSelectedModel} providersList={providersList} sniffedModels={sniffedModels} />
 
-                {renderContextAccordion(reviewContextExpanded, setReviewContextExpanded, reviewContext, setReviewContext, reviewFiles, setReviewFiles, removeReviewFile, reviewHistoryId, setReviewHistoryId)}
+                <ContextAccordion expanded={reviewContextExpanded} setExpanded={setReviewContextExpanded} context={reviewContext} setContext={setReviewContext} files={reviewFiles} setFiles={setReviewFiles} removeFile={removeReviewFile} historyId={reviewHistoryId} setHistoryId={setReviewHistoryId} historyReports={historyReports} onLoadHistory={loadHistoryToContextTab} />
 
                 {/* Skill selector */}
                 <div className="border border-gray-200 rounded-2xl bg-white p-4 shadow-sm">
@@ -1887,9 +1630,9 @@ export default function App() {
                   </div>
                 </div>
 
-                {renderProviderSelector()}
+                <ProviderSelector selectedProvider={selectedProvider} onProviderChange={handleProviderChange} selectedModel={selectedModel} onModelChange={setSelectedModel} providersList={providersList} sniffedModels={sniffedModels} />
 
-                {renderContextAccordion(agentContextExpanded, setAgentContextExpanded, agentContext, setAgentContext, agentFiles, setAgentFiles, removeAgentFile, agentHistoryId, setAgentHistoryId)}
+                <ContextAccordion expanded={agentContextExpanded} setExpanded={setAgentContextExpanded} context={agentContext} setContext={setAgentContext} files={agentFiles} setFiles={setAgentFiles} removeFile={removeAgentFile} historyId={agentHistoryId} setHistoryId={setAgentHistoryId} historyReports={historyReports} onLoadHistory={loadHistoryToContextTab} />
 
                 {/* Skill selector */}
                 <div className="border border-gray-200 rounded-2xl bg-white p-4 shadow-sm">
@@ -2420,37 +2163,7 @@ export default function App() {
 
             {/* LOGS MONITOR (TOP FLOATING BAR DURING CALCULATION) */}
             {progressLogs.length > 0 && (
-              <div className="p-6 bg-slate-900 text-[#38BDF8] font-mono text-xs border-b border-slate-900 shrink-0 max-h-60 overflow-y-auto space-y-1">
-                <div className="flex items-center justify-between text-slate-400 border-b border-slate-800 pb-1.5 mb-2 font-sans select-none">
-                  <span>⚙️ 控制台计算进程日志</span>
-                  <span className="text-[10px] text-slate-500">{executionSteps.length > 0 ? `${executionSteps.length} 步骤` : ''}</span>
-                </div>
-                
-                {/* Step timeline */}
-                {executionSteps.length > 0 && (
-                  <div className="mb-3 border-b border-slate-800 pb-2">
-                    {executionSteps.map((step: any, idx: number) => {
-                      const statusIcon = {"done": "✅", "running": "⏳", "error": "❌", "warning": "⚠️"}[step.status] || "➖";
-                      return (
-                        <div key={idx} className="flex items-start gap-2 py-0.5">
-                          <span className="shrink-0">{statusIcon}</span>
-                          <span className="text-slate-300">{step.action}</span>
-                          {step.query && <span className="text-slate-500 truncate max-w-[200px]">: {step.query}</span>}
-                          {step.result && <span className="text-slate-500 text-[10px]">— {step.result}</span>}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-
-                {progressLogs.map((log, idx) => (
-                  <div key={idx} className="flex items-start gap-1.5 leading-relaxed">
-                    <span className="text-slate-600 font-sans">{idx + 1}.</span>
-                    <span>{log}</span>
-                  </div>
-                ))}
-                <div ref={logBoxEndRef} />
-              </div>
+              <LogPanel progressLogs={progressLogs} executionSteps={executionSteps} logBoxEndRef={logBoxEndRef} />
             )}
 
             {/* RESULTS CONTENT RENDERER */}

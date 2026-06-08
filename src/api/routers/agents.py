@@ -3,36 +3,10 @@ from datetime import datetime
 
 from fastapi import APIRouter
 from src.models.manager import get_model_manager
-from src.models.key_store import get_key_store
 from src.api.schemas import AgentCollaborateRequest, ApiResponse
+from src.api.dependencies import resolve_provider_model, has_api_key
 
 router = APIRouter()
-
-
-def _provider_model(req_provider: str = "", req_model: str = ""):
-    """Get provider & model — prefer request params, then configured default."""
-    mgr = get_model_manager()
-    if req_provider:
-        p = mgr.get_provider(req_provider)
-        if p:
-            return p.config.name, req_model or p.config.default_model or "deepseek-chat"
-    default = mgr.default_provider
-    if default:
-        cfg = next((c for c in mgr.list_providers() if c.name == default), None)
-        if cfg:
-            return cfg.name, cfg.default_model or "deepseek-chat"
-    providers = mgr.list_providers()
-    if providers:
-        p = providers[0]
-        return p.name, p.default_model or "deepseek-chat"
-    return "deepseek", "deepseek-chat"
-
-
-def _has_api_key(provider_name: str) -> bool:
-    """Check if provider has a valid API key configured."""
-    ks = get_key_store()
-    key = ks.get_key(provider_name)
-    return bool(key and key.strip() and key.strip() != "no-key" and key.strip() != "YOUR_API_KEY")
 
 
 def _demo_collaboration(topic: str):
@@ -78,7 +52,7 @@ def _demo_collaboration(topic: str):
 @router.post("/api/agents-collaborate", response_model=ApiResponse)
 def agents_collaborate(req: AgentCollaborateRequest):
     try:
-        provider, model = _provider_model(req.provider, req.model)
+        provider, model = resolve_provider_model(req.provider, req.model)
         logs = [
             "正在启动多智能体协作网络...",
             f"任务主题: {req.topic[:60]}",
@@ -86,7 +60,7 @@ def agents_collaborate(req: AgentCollaborateRequest):
         ]
 
         # Check API key before any LLM calls
-        if not _has_api_key(provider):
+        if not has_api_key(provider):
             logs.append("未检测到 API Key，切换至演示模式")
             exchange, markdown = _demo_collaboration(req.topic)
             return ApiResponse(logs=logs, markdown=markdown, exchange=exchange)

@@ -20,6 +20,8 @@ from pathlib import Path
 from typing import Dict, List, Optional
 from dataclasses import dataclass, field, asdict
 
+import httpx
+
 from src.models.key_store import get_key_store
 
 # MCP Python SDK imports

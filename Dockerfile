@@ -27,12 +27,11 @@ COPY .env* ./
 RUN mkdir -p skills_library research_outputs
 
 # Expose Streamlit port
-EXPOSE 8501
-# Expose FastAPI port (optional)
 EXPOSE 8000
 
-# Health check for Streamlit
+# Health check for API
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')" || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')" || exit 1
 
-CMD ["streamlit", "run", "src/app.py", "--server.port=8501", "--server.address=0.0.0.0", "--server.headless=true"]
+# 启动 API 服务（Streamlit 已由 React 前端替代）
+CMD ["uvicorn", "src.api.server:app", "--host", "0.0.0.0", "--port", "8000"]
