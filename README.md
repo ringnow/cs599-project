@@ -27,11 +27,13 @@ Agentic AI 研究助手，支持多模型切换、多智能体协作和插件化
 | 协议 | MCP (Model Context Protocol) |
 | UI | React + Vite (原 Streamlit 已替换) |
 | 学术搜索 | Semantic Scholar API + BoCha/Brave |
-| 容器 | Docker + Docker Compose |
+ | 容器 | Docker + Docker Compose |
 
 ## 致谢
 
 文献检索功能由 [Semantic Scholar](https://www.semanticscholar.org/) 提供支持。
+PDF 解析由 [PyMuPDF](https://github.com/pymupdf/PyMuPDF) 提供支持。
+免费 MCP 服务器由 [Model Context Protocol](https://github.com/modelcontextprotocol) 提供。
 
 ## 快速开始
 
@@ -42,13 +44,15 @@ git clone <你的仓库地址>
 cd cs599-project
 cp .env.example .env
 pip install -r requirements.txt
+# PDF 解析依赖（可选，用于读取论文全文）
+pip install PyMuPDF
 ```
 
 ### 2. 配置 API 密钥
 
 **方式一：Web 界面（推荐）**
-- 启动应用后，在侧边栏「API 密钥管理」中输入密钥
-- 密钥自动加密存储在 `~/.cs599-agent/`，随仓库提交
+- 启动应用后，在「服务商管理」中输入 API Key
+- 密钥自动加密存储在 `~/.cs599-agent/`
 
 **方式二：环境变量**
 ```bash
@@ -77,10 +81,15 @@ python src/run_cli.py "论文主题" --skill paper_writing
 docker-compose up --build
 ```
 
-## 工作模式
+## 核心功能
 
-### 🔍 调研报告
-深度研究任意主题，自动搜索网络与学术文献（Semantic Scholar），生成结构化调研报告。
+### 🔍 调研报告（学术级引用）
+深度研究任意主题，支持：
+- **论文深度阅读**：搜索到论文后自动下载 PDF / 调取 API 获取全文
+- **LLM 评估**：逐篇评估论文关联度（高/中/低），只采纳"值得引用"的论文
+- **真实引用**：正文使用 `[N]` 格式引用，参考文献仅含真实学术论文
+- **排除非学术来源**：CSDN、知乎、博客园等不作为正式引用
+- 参考文献格式规范：`作者. 标题 (年份). 期刊`
 
 ### 💡 论文构思
 先进行深度调研生成报告，再基于报告为你构思：
@@ -112,7 +121,42 @@ docker-compose up --build
 3. **撰稿人** → 文档撰写与润色
 
 ### 🧰 技能管理
-浏览和管理研究技能，支持安装自定义技能。
+浏览和管理研究技能，支持安装自定义技能。**每个标签页（研究报告/大纲/论文/综述/智能助手/智能体）均可选择要执行的技能**。
+
+### 🔌 免费 MCP 服务器
+- **Filesystem MCP**：本地文件系统操作（免费，无需 API Key）
+- **Memory MCP**：本地知识图谱记忆（免费，无需 API Key）
+- **Tavily MCP**：AI 搜索引擎（需 Tavily API Key）
+
+### 📊 后台步骤追踪
+执行研究任务时，后台实时显示：
+- ✅ 步骤状态（搜索/阅读/评估/合成/报告）
+- 🔌 MCP 调用日志
+- 📊 论文评估结果（关联度+是否引用）
+- 📈 完整执行时间线
+
+## 论文引用机制
+
+```
+搜索论文 → 下载PDF/API获取全文 → LLM逐篇评估 → 只保留值得引用的 → 正文编号引用 → 文末列出真实参考文献
+```
+
+- 搜索来源：Semantic Scholar（学术）+ BoCha/Brave（网络背景信息）
+- 论文阅读：优先 OpenAccess PDF（PyMuPDF）→ 其次 S2 Paper API → 最后摘要
+- 评估维度：核心发现、关联度（高/中/低）、是否值得引用
+- 引用格式：`[N] 作者. 标题 (年份). 期刊. URL`
+- 排除非学术来源：CSDN、知乎、博客园、个人主页等不作为正式引用
+
+## MCP 服务器管理
+
+通过「服务商管理」→「MCP 管理」面板可以：
+
+| MCP 服务器 | 类型 | 费用 | 启动方式 |
+|-----------|------|------|---------|
+| Filesystem MCP | stdio | 免费 | 一键启动 |
+| Memory MCP | stdio | 免费 | 一键启动 |
+| Tavily Search (远程) | SSE | 需 API Key | 配置后启用 |
+| 自定义 MCP | SSE | - | 手动添加 |
 
 ## 添加自定义模型
 
