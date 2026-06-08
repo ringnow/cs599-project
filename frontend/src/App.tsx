@@ -36,6 +36,7 @@ import { ContextAccordion } from "./components/ContextAccordion";
 import { ProviderSelector } from "./components/ProviderSelector";
 import { SkillSelector } from "./components/SkillSelector";
 import { LogPanel } from "./components/LogPanel";
+import { useApi, HttpError, AuthError } from "./hooks/useApi";
 
 export default function App() {
   // Navigation & Base States
@@ -191,21 +192,7 @@ export default function App() {
   const abortControllerRef = useRef<AbortController | null>(null);
   const currentRequestIdRef = useRef<string>("");
 
-  const clearAllTimers = () => {
-    timerRefs.current.forEach(clearTimeout);
-    timerRefs.current = [];
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      abortControllerRef.current = null;
-    }
-  };
-
-  const addTimedLog = (msg: string, delay: number) => {
-    const id = setTimeout(() => {
-      setProgressLogs(prev => [...prev, msg]);
-    }, delay);
-    timerRefs.current.push(id);
-  };
+  // clearAllTimers, addTimedLog moved to hooks/useApi.ts
 
   useEffect(() => {
     if (logBoxEndRef.current) {
@@ -547,34 +534,11 @@ export default function App() {
 
 
 
-  // Helper: Assemble request headers
-  const getRequestHeaders = () => {
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json"
-    };
-    if (apiKey) {
-      headers["Authorization"] = `Bearer ${apiKey}`;
-    }
-    return headers;
-  };
-
-  // Helper: Compile base URL
-  const getRequestUrl = (endpoint: string) => {
-    // If customized API url exists, use that. Otherwise use local relative endpoint
-    const base = apiUrl.trim().replace(/\/$/, "");
-    return base ? `${base}/api${endpoint}` : `/api${endpoint}`;
-  };
+  // getRequestHeaders, getRequestUrl moved to hooks/useApi.ts
 
   // API Client triggers
   const handleStopExecution = () => {
-    clearAllTimers();
-    // Signal backend cancellation
-    const rid = currentRequestIdRef.current;
-    if (rid) {
-      fetch(`/api/cancel/${rid}`, { method: "POST" }).catch(() => {});
-    }
-    setIsLoading(false);
-    setProgressLogs(prev => [...prev, "⚠️ 已由用户手动中断执行。已截获阶段计算结果。"]);
+    stopExecution();
     showToast("计算强行中断");
   };
 
@@ -808,22 +772,7 @@ export default function App() {
     }
   };
 
-  // Custom error classes for differentiated error handling
-  class HttpError extends Error {
-    status: number;
-    constructor(status: number, message: string) {
-      super(message);
-      this.name = "HttpError";
-      this.status = status;
-    }
-  }
-
-  class AuthError extends Error {
-    constructor(message: string) {
-      super(message);
-      this.name = "AuthError";
-    }
-  }
+  // HttpError, AuthError moved to hooks/useApi.ts
 
   // (MarkdownRenderer moved to components/MarkdownRenderer.tsx)
 

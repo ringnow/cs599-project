@@ -528,50 +528,29 @@ class MCPManager:
             return {"error": f"解析 MCP 结果失败: {e}"}
 
     def call_tool(self, server_name: str, tool_name: str, arguments: dict) -> dict:
-        """Call a tool on an MCP server (sync wrapper around async)."""
+        """Call a tool on an MCP server.
+
+        Simplified sync wrapper: runs the async call in a dedicated thread
+        with its own event loop, avoiding event loop conflicts.
+        """
         import concurrent.futures
 
-        def _run_async():
-            """Run async call in a fresh event loop."""
-            loop = asyncio.new_event_loop()
+        def _run_in_new_loop():
+            new_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(new_loop)
             try:
-                asyncio.set_event_loop(loop)
-                return loop.run_until_complete(
+                return new_loop.run_until_complete(
                     self._call_tool_async(server_name, tool_name, arguments)
                 )
             finally:
-                loop.close()
+                new_loop.close()
 
         try:
-            # Check if there's already a running event loop
-            loop = asyncio.get_running_loop()
-            if loop:
-                # Use thread pool with fresh loop
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                    future = pool.submit(_run_async)
-                    try:
-                        return future.result(timeout=60)
-                    except concurrent.futures.TimeoutError:
-                        return {"error": "MCP call timed out (60s)"}
-                    except Exception as te:
-                        return {"error": f"MCP thread error: {te}"}
-        except RuntimeError:
-            # No running event loop — use asyncio.run directly
-            pass
-
-        try:
-            return asyncio.run(self._call_tool_async(server_name, tool_name, arguments))
-        except RuntimeError as e:
-            if "already running" in str(e) or "cannot be called from a running loop" in str(e):
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                    future = pool.submit(_run_async)
-                    try:
-                        return future.result(timeout=60)
-                    except concurrent.futures.TimeoutError:
-                        return {"error": "MCP call timed out (60s)"}
-                    except Exception as te:
-                        return {"error": f"MCP thread error: {te}"}
-            return {"error": f"Async runtime error: {e}"}
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(_run_in_new_loop)
+                return future.result(timeout=60)
+        except concurrent.futures.TimeoutError:
+            return {"error": "MCP call timed out (60s)"}
         except Exception as e:
             return {"error": f"MCP tool call error: {e}"}
 
