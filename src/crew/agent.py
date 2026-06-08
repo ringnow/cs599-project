@@ -292,8 +292,8 @@ Provide your review in this format:
 - Additional research needed
 
 ## 6. Overall Assessment
-- Score: X/10
-- Verdict: Pass / Revise / Reject"""
+Output a JSON object with your assessment (no other text):
+{"score": 8, "verdict": "pass", "issues": ["issue1"], "suggestions": ["suggestion1"]}"""
         
         return self._llm_call(prompt, self.backstory)
 
