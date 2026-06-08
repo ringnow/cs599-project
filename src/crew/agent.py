@@ -293,7 +293,7 @@ Provide your review in this format:
 
 ## 6. Overall Assessment
 Output a JSON object with your assessment (no other text):
-{"score": 8, "verdict": "pass", "issues": ["issue1"], "suggestions": ["suggestion1"]}"""
+{{"score": 8, "verdict": "pass", "issues": ["issue1"], "suggestions": ["suggestion1"]}}"""
         
         return self._llm_call(prompt, self.backstory)
 
