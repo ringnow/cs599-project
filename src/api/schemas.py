@@ -29,6 +29,7 @@ class OutlineRequest(BaseModel):
     field: str = ""
     paper_type: str = "研究论文"
     context: str = ""
+    skill_override: str = ""
     provider: str = ""
     model: str = ""
     request_id: str = ""
@@ -42,6 +43,7 @@ class ThesisRequest(BaseModel):
     length: str = "medium"
     sections: List[str] = []
     context: str = ""
+    skill_override: str = ""
     provider: str = ""
     model: str = ""
     request_id: str = ""
@@ -54,6 +56,7 @@ class ReviewRequest(BaseModel):
     taxonomy: bool = True
     comparisons: bool = True
     context: str = ""
+    skill_override: str = ""
     provider: str = ""
     model: str = ""
     request_id: str = ""
@@ -64,6 +67,7 @@ class AgentCollaborateRequest(BaseModel):
     doc_type: str = "report"
     iterations: int = 1
     context: str = ""
+    skill_override: str = ""
     provider: str = ""
     model: str = ""
     request_id: str = ""

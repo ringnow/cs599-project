@@ -186,9 +186,10 @@ async def outline(req: OutlineRequest):
             logs.append("未检测到 API Key，切换至演示模式")
             return ApiResponse(logs=logs, markdown=_demo_content(req.subject, "outline"))
 
+        actual = req.skill_override if req.skill_override else "research"
         ctx = SkillContext(topic=req.subject, provider_name=provider, model_id=model,
                            custom_params={"depth": 2, "sources": ["web", "semantic_scholar"], "context": req.context or req.field, "request_id": req.request_id})
-        research_result = get_skill_registry().execute("research", ctx)
+        research_result = get_skill_registry().execute(actual, ctx)
         logs.append("调研完成，正在生成大纲...")
 
         mgr = get_model_manager()
@@ -230,7 +231,8 @@ async def thesis(req: ThesisRequest):
             return ApiResponse(logs=logs, markdown=_demo_content(req.blockTitle, "thesis"))
 
         sections = req.sections or ["abstract", "introduction", "methodology", "experiments", "conclusion"]
-        content = await _execute_skill_with_timeout("paper_writing", req.blockTitle, provider, model, {
+        actual = req.skill_override if req.skill_override else "paper_writing"
+        content = await _execute_skill_with_timeout(actual, req.blockTitle, provider, model, {
             "paper_type": req.paper_type or "research",
             "style": style,
             "length": req.length or "medium",
@@ -257,7 +259,8 @@ async def literature_review(req: ReviewRequest):
             logs.append("未检测到 API Key，切换至演示模式")
             return ApiResponse(logs=logs, markdown=_demo_content(req.keyword, "literature-review"))
 
-        content = await _execute_skill_with_timeout("survey_writing", req.keyword, provider, model, {
+        actual = req.skill_override if req.skill_override else "survey_writing"
+        content = await _execute_skill_with_timeout(actual, req.keyword, provider, model, {
             "scope": req.scope or "focused",
             "taxonomy": req.taxonomy,
             "comparisons": req.comparisons,

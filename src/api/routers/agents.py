@@ -91,6 +91,32 @@ def agents_collaborate(req: AgentCollaborateRequest):
             exchange, markdown = _demo_collaboration(req.topic)
             return ApiResponse(logs=logs, markdown=markdown, exchange=exchange)
 
+        # If skill_override is set, use skill instead of Crew
+        if req.skill_override:
+            logs.append(f"🛠️ 使用指定技能: {req.skill_override}")
+            from src.skills.registry import get_skill_registry
+            from src.skills.base import SkillContext
+            ctx = SkillContext(
+                topic=req.topic,
+                provider_name=provider,
+                model_id=model,
+                custom_params={
+                    "depth": 2,
+                    "sources": ["web", "semantic_scholar"],
+                    "context": req.context or "",
+                    "request_id": req.request_id,
+                }
+            )
+            sr = get_skill_registry().execute(req.skill_override, ctx)
+            if sr.success:
+                logs.append("技能执行完成！")
+                from src.api.routers.history import save_report
+                save_report("agents", req.topic, sr.content)
+                return ApiResponse(logs=logs, markdown=sr.content)
+            else:
+                logs.append(f"❌ 技能执行失败: {sr.error}")
+                return ApiResponse(logs=logs, markdown=f"### ⚠️ 技能执行失败\n\n**错误**: {sr.error}")
+
         from src.crew.crew import Crew
         crew = Crew(provider_name=provider, model_id=model)
         result = crew.run_sequential(req.topic, doc_type=req.doc_type, max_iterations=req.iterations, context=req.context or "")

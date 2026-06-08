@@ -123,6 +123,7 @@ export default function App() {
   // Active generation results
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [progressLogs, setProgressLogs] = useState<string[]>([]);
+  const [executionSteps, setExecutionSteps] = useState<any[]>([]);
   const [currentMarkdown, setCurrentMarkdown] = useState<string>("");
 
   // Skills Manager states
@@ -305,7 +306,7 @@ export default function App() {
     try { const r = await fetch("/api/health"); if (r.ok) { setBackendOnline(true); } else { setBackendOnline(false); } } catch (_) { setBackendOnline(false); }
     try { const r = await fetch("/api/providers/health"); if (r.ok) { const d = await r.json(); setProvidersHealth(d); } } catch (_) {}
   };
-  const refreshAll = () => { fetchProviders(); fetchPresets(); fetchMcpServers(); fetchTavilyStatus(); fetchSearchBackends(); fetchHealth(); };
+  const refreshAll = () => { fetchProviders(); fetchPresets(); fetchMcpServers(); fetchTavilyStatus(); fetchStdioStatus(); fetchSearchBackends(); fetchHealth(); };
 
   // Load all data on mount
   useEffect(() => { refreshAll(); }, []);
@@ -383,6 +384,31 @@ export default function App() {
   const stopTavily = async () => {
     await fetch("/api/mcp/tavily/stop", { method: "POST" });
     showToast("Tavily MCP 已停止"); fetchTavilyStatus(); fetchMcpServers();
+  };
+
+  // Stdio MCP (Filesystem / Memory) actions
+  const [filesystemRunning, setFilesystemRunning] = useState(false);
+  const [memoryRunning, setMemoryRunning] = useState(false);
+
+  const startStdioMcp = async (name: string) => {
+    const res = await fetch(`/api/mcp/stdio/${name}/start`, { method: "POST" });
+    if (res.ok) { showToast(`${name} 已启动`); fetchStdioStatus(); }
+    else { const e = await res.json(); showToast(`启动失败: ${e.detail}`); }
+  };
+  const stopStdioMcp = async (name: string) => {
+    const res = await fetch(`/api/mcp/stdio/${name}/stop`, { method: "POST" });
+    if (res.ok) { showToast(`${name} 已停止`); fetchStdioStatus(); }
+    else { const e = await res.json(); showToast(`停止失败: ${e.detail}`); }
+  };
+  const fetchStdioStatus = async () => {
+    try {
+      const [fsRes, memRes] = await Promise.all([
+        fetch("/api/mcp/stdio/filesystem_stdio/status"),
+        fetch("/api/mcp/stdio/memory_stdio/status"),
+      ]);
+      if (fsRes.ok) { const d = await fsRes.json(); setFilesystemRunning(d.running); }
+      if (memRes.ok) { const d = await memRes.json(); setMemoryRunning(d.running); }
+    } catch (_) {}
   };
 
   // Add remote MCP
@@ -702,6 +728,7 @@ export default function App() {
           field: outlineField,
           paper_type: outlinePaperType,
           context: outlineContext,
+          skill_override: skillOverride,
           provider: selectedProvider,
           model: selectedModel
         };
@@ -716,6 +743,7 @@ export default function App() {
           paper_type: thesisPaperType,
           length: thesisLength,
           context: thesisContext,
+          skill_override: skillOverride,
           provider: selectedProvider,
           model: selectedModel
         };
@@ -730,6 +758,7 @@ export default function App() {
           taxonomy: reviewTaxonomy,
           comparisons: reviewComparisons,
           context: reviewContext,
+          skill_override: skillOverride,
           provider: selectedProvider,
           model: selectedModel
         };
@@ -742,6 +771,7 @@ export default function App() {
           doc_type: agentDocType,
           iterations: agentIterations,
           context: agentContext,
+          skill_override: skillOverride,
           provider: selectedProvider,
           model: selectedModel
         };
@@ -807,6 +837,7 @@ export default function App() {
 
       // Clear simulated logs and show real ones
       setProgressLogs([]);
+      setExecutionSteps(data.steps || []);
 
       // Append server returned logs
       if (data.logs && Array.isArray(data.logs)) {
@@ -1381,6 +1412,21 @@ export default function App() {
                     />
                   </div>
 
+                  {/* Skill selector for assistant */}
+                  <div className="flex items-center gap-2 bg-slate-50 border border-gray-100 rounded-xl p-2.5">
+                    <label className="text-[10px] font-semibold text-gray-500 whitespace-nowrap">🛠️ 指定技能:</label>
+                    <select
+                      value={skillOverride}
+                      onChange={(e) => setSkillOverride(e.target.value)}
+                      className="flex-1 text-[11px] p-1.5 border rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    >
+                      <option value="">自动路由（默认）</option>
+                      {allSkills.map((sk: any) => (
+                        <option key={sk.name} value={sk.name}>{sk.display_name || sk.name}</option>
+                      ))}
+                    </select>
+                  </div>
+
                   {/* Trigger buttons */}
                   <div className="flex gap-3">
                     <button
@@ -1523,6 +1569,22 @@ export default function App() {
 
                 {renderContextAccordion(reportContextExpanded, setReportContextExpanded, reportContext, setReportContext, reportFiles, setReportFiles, removeReportFile, reportHistoryId, setReportHistoryId)}
 
+                {/* Skill selector */}
+                <div className="border border-gray-200 rounded-2xl bg-white p-4 shadow-sm">
+                  <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-2">🛠️ 执行技能</label>
+                  <select
+                    value={skillOverride}
+                    onChange={(e) => setSkillOverride(e.target.value)}
+                    className="w-full text-xs p-2.5 border rounded-xl bg-slate-50/50 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  >
+                    <option value="">自动选择（推荐）</option>
+                    {allSkills.map((sk: any) => (
+                      <option key={sk.name} value={sk.name}>{sk.display_name || sk.name}</option>
+                    ))}
+                  </select>
+                  <p className="text-[9px] text-gray-400 mt-1">选择特定技能覆盖默认的研究流程</p>
+                </div>
+
                 <button
                   onClick={() => handleRunTask("report")}
                   disabled={isLoading}
@@ -1578,6 +1640,22 @@ export default function App() {
                 {renderProviderSelector()}
 
                 {renderContextAccordion(outlineContextExpanded, setOutlineContextExpanded, outlineContext, setOutlineContext, outlineFiles, setOutlineFiles, removeOutlineFile, outlineHistoryId, setOutlineHistoryId)}
+
+                {/* Skill selector */}
+                <div className="border border-gray-200 rounded-2xl bg-white p-4 shadow-sm">
+                  <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-2">🛠️ 执行技能</label>
+                  <select
+                    value={skillOverride}
+                    onChange={(e) => setSkillOverride(e.target.value)}
+                    className="w-full text-xs p-2.5 border rounded-xl bg-slate-50/50 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  >
+                    <option value="">自动选择（推荐）</option>
+                    {allSkills.map((sk: any) => (
+                      <option key={sk.name} value={sk.name}>{sk.display_name || sk.name}</option>
+                    ))}
+                  </select>
+                  <p className="text-[9px] text-gray-400 mt-1">选择特定技能覆盖默认的研究流程</p>
+                </div>
 
                 <button
                   onClick={() => handleRunTask("outline")}
@@ -1663,6 +1741,22 @@ export default function App() {
 
                 {renderContextAccordion(thesisContextExpanded, setThesisContextExpanded, thesisContext, setThesisContext, thesisFiles, setThesisFiles, removeThesisFile, thesisHistoryId, setThesisHistoryId)}
 
+                {/* Skill selector */}
+                <div className="border border-gray-200 rounded-2xl bg-white p-4 shadow-sm">
+                  <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-2">🛠️ 执行技能</label>
+                  <select
+                    value={skillOverride}
+                    onChange={(e) => setSkillOverride(e.target.value)}
+                    className="w-full text-xs p-2.5 border rounded-xl bg-slate-50/50 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  >
+                    <option value="">自动选择（推荐）</option>
+                    {allSkills.map((sk: any) => (
+                      <option key={sk.name} value={sk.name}>{sk.display_name || sk.name}</option>
+                    ))}
+                  </select>
+                  <p className="text-[9px] text-gray-400 mt-1">选择特定技能覆盖默认的论文写作流程</p>
+                </div>
+
                 <button
                   onClick={() => handleRunTask("thesis")}
                   disabled={isLoading}
@@ -1730,6 +1824,22 @@ export default function App() {
 
                 {renderContextAccordion(reviewContextExpanded, setReviewContextExpanded, reviewContext, setReviewContext, reviewFiles, setReviewFiles, removeReviewFile, reviewHistoryId, setReviewHistoryId)}
 
+                {/* Skill selector */}
+                <div className="border border-gray-200 rounded-2xl bg-white p-4 shadow-sm">
+                  <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-2">🛠️ 执行技能</label>
+                  <select
+                    value={skillOverride}
+                    onChange={(e) => setSkillOverride(e.target.value)}
+                    className="w-full text-xs p-2.5 border rounded-xl bg-slate-50/50 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  >
+                    <option value="">自动选择（推荐）</option>
+                    {allSkills.map((sk: any) => (
+                      <option key={sk.name} value={sk.name}>{sk.display_name || sk.name}</option>
+                    ))}
+                  </select>
+                  <p className="text-[9px] text-gray-400 mt-1">选择特定技能覆盖默认的综述流程</p>
+                </div>
+
                 <button
                   onClick={() => handleRunTask("review")}
                   disabled={isLoading}
@@ -1780,6 +1890,22 @@ export default function App() {
                 {renderProviderSelector()}
 
                 {renderContextAccordion(agentContextExpanded, setAgentContextExpanded, agentContext, setAgentContext, agentFiles, setAgentFiles, removeAgentFile, agentHistoryId, setAgentHistoryId)}
+
+                {/* Skill selector */}
+                <div className="border border-gray-200 rounded-2xl bg-white p-4 shadow-sm">
+                  <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-2">🛠️ 执行技能</label>
+                  <select
+                    value={skillOverride}
+                    onChange={(e) => setSkillOverride(e.target.value)}
+                    className="w-full text-xs p-2.5 border rounded-xl bg-slate-50/50 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  >
+                    <option value="">自动选择（推荐）</option>
+                    {allSkills.map((sk: any) => (
+                      <option key={sk.name} value={sk.name}>{sk.display_name || sk.name}</option>
+                    ))}
+                  </select>
+                  <p className="text-[9px] text-gray-400 mt-1">选择特定技能覆盖默认的多智能体流程</p>
+                </div>
 
                 <button
                   onClick={() => handleRunTask("agents")}
@@ -2051,6 +2177,53 @@ export default function App() {
                       )}
                     </div>
 
+                    {/* Free Stdio MCP: Filesystem + Memory */}
+                    <div className="bg-slate-50/50 border border-gray-100 rounded-xl p-4">
+                      <div className="flex items-center justify-between mb-3">
+                        <span className="text-xs font-semibold text-gray-700">🆓 免费 MCP（无需API Key）</span>
+                      </div>
+                      <div className="space-y-3">
+                        {/* Filesystem */}
+                        <div className="flex items-center justify-between bg-white border border-gray-100 rounded-lg p-2.5">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-semibold text-gray-700">📁 Filesystem</span>
+                              <span className={`text-[9px] px-1.5 py-0.5 rounded-full ${filesystemRunning ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' : 'bg-gray-100 text-gray-500 border border-gray-200'}`}>
+                                {filesystemRunning ? '运行中' : '未运行'}
+                              </span>
+                            </div>
+                            <p className="text-[9px] text-gray-400 mt-0.5">本地文件系统读写（/tmp/mcp-allowed）</p>
+                          </div>
+                          <div className="flex gap-1 shrink-0">
+                            {filesystemRunning ? (
+                              <button onClick={() => stopStdioMcp('filesystem_stdio')} className="text-[9px] font-semibold text-rose-600 bg-rose-50 border border-rose-100 px-2.5 py-1 rounded-full hover:bg-rose-100">⏹️ 停止</button>
+                            ) : (
+                              <button onClick={() => startStdioMcp('filesystem_stdio')} className="text-[9px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-100 px-2.5 py-1 rounded-full hover:bg-emerald-100">▶️ 启动</button>
+                            )}
+                          </div>
+                        </div>
+                        {/* Memory */}
+                        <div className="flex items-center justify-between bg-white border border-gray-100 rounded-lg p-2.5">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-semibold text-gray-700">🧠 Memory</span>
+                              <span className={`text-[9px] px-1.5 py-0.5 rounded-full ${memoryRunning ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' : 'bg-gray-100 text-gray-500 border border-gray-200'}`}>
+                                {memoryRunning ? '运行中' : '未运行'}
+                              </span>
+                            </div>
+                            <p className="text-[9px] text-gray-400 mt-0.5">本地知识图谱记忆系统</p>
+                          </div>
+                          <div className="flex gap-1 shrink-0">
+                            {memoryRunning ? (
+                              <button onClick={() => stopStdioMcp('memory_stdio')} className="text-[9px] font-semibold text-rose-600 bg-rose-50 border border-rose-100 px-2.5 py-1 rounded-full hover:bg-rose-100">⏹️ 停止</button>
+                            ) : (
+                              <button onClick={() => startStdioMcp('memory_stdio')} className="text-[9px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-100 px-2.5 py-1 rounded-full hover:bg-emerald-100">▶️ 启动</button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
                     {/* Remote MCP */}
                     <div className="bg-slate-50/50 border border-gray-100 rounded-xl p-4">
                       <span className="text-xs font-semibold text-gray-700 block mb-2">🌐 远程 MCP</span>
@@ -2247,12 +2420,29 @@ export default function App() {
 
             {/* LOGS MONITOR (TOP FLOATING BAR DURING CALCULATION) */}
             {progressLogs.length > 0 && (
-              <div className="p-6 bg-slate-900 text-[#38BDF8] font-mono text-xs border-b border-slate-900 shrink-0 select-none max-h-40 overflow-y-auto space-y-1">
+              <div className="p-6 bg-slate-900 text-[#38BDF8] font-mono text-xs border-b border-slate-900 shrink-0 max-h-60 overflow-y-auto space-y-1">
                 <div className="flex items-center justify-between text-slate-400 border-b border-slate-800 pb-1.5 mb-2 font-sans select-none">
                   <span>⚙️ 控制台计算进程日志</span>
-                  <span>线程状态: LATEST</span>
+                  <span className="text-[10px] text-slate-500">{executionSteps.length > 0 ? `${executionSteps.length} 步骤` : ''}</span>
                 </div>
                 
+                {/* Step timeline */}
+                {executionSteps.length > 0 && (
+                  <div className="mb-3 border-b border-slate-800 pb-2">
+                    {executionSteps.map((step: any, idx: number) => {
+                      const statusIcon = {"done": "✅", "running": "⏳", "error": "❌", "warning": "⚠️"}[step.status] || "➖";
+                      return (
+                        <div key={idx} className="flex items-start gap-2 py-0.5">
+                          <span className="shrink-0">{statusIcon}</span>
+                          <span className="text-slate-300">{step.action}</span>
+                          {step.query && <span className="text-slate-500 truncate max-w-[200px]">: {step.query}</span>}
+                          {step.result && <span className="text-slate-500 text-[10px]">— {step.result}</span>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
                 {progressLogs.map((log, idx) => (
                   <div key={idx} className="flex items-start gap-1.5 leading-relaxed">
                     <span className="text-slate-600 font-sans">{idx + 1}.</span>
