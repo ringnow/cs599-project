@@ -94,6 +94,22 @@ BUILTIN_MCP_PRESETS = {
         tools_prefix="fs_",
         description="文件系统操作 MCP Server",
     ),
+    "filesystem_stdio": MCPServerConfig(
+        name="filesystem_stdio",
+        display_name="Filesystem (本地 stdio) ★免费",
+        url="/tmp/mcp-allowed",
+        tools_prefix="filesystem_",
+        description="本地文件系统操作 — 通过 npx 启动，无需 API Key，免费",
+        server_type="stdio",
+    ),
+    "memory_stdio": MCPServerConfig(
+        name="memory_stdio",
+        display_name="Memory (本地记忆) ★免费",
+        url="/tmp/mcp-memory",
+        tools_prefix="memory_",
+        description="本地知识图谱记忆系统 — 通过 npx 启动，无需 API Key，免费",
+        server_type="stdio",
+    ),
 }
 
 
@@ -104,6 +120,7 @@ class MCPManager:
         self._servers: Dict[str, MCPServerConfig] = {}
         self._key_store = get_key_store()
         self._tavily_process: Optional[subprocess.Popen] = None
+        self._stdio_processes: Dict[str, subprocess.Popen] = {}  # Generic stdio servers
         self._load()
 
     def _load(self):
@@ -153,7 +170,7 @@ class MCPManager:
         return True, f"已添加 MCP Server '{config.display_name}' ({config.url})"
 
     def add_custom(self, name: str, display_name: str, url: str,
-                   api_key: str = "", tools_prefix: str = "") -> tuple[bool, str]:
+                   api_key: str = "", tools_prefix: str = "", server_type: str = "sse") -> tuple[bool, str]:
         """Add a custom MCP server."""
         if not name or not url:
             return False, "名称和 URL 不能为空"
@@ -161,7 +178,7 @@ class MCPManager:
         config = MCPServerConfig(
             name=name, display_name=display_name or name,
             url=url, api_key=api_key, tools_prefix=tools_prefix,
-            is_active=True,
+            is_active=True, server_type=server_type,
         )
         self._servers[name] = config
         self._save()
@@ -210,7 +227,9 @@ class MCPManager:
             if name == "tavily":
                 running = self.is_tavily_running()
                 return running, f"进程{'运行中' if running else '未启动'}"
-            return True, "stdio (启动后可用)"
+            # Generic stdio server
+            running = self.is_stdio_running(name)
+            return running, f"进程{'运行中' if running else '未启动'}"
 
         # SSE servers: HTTP GET check
         try:
@@ -219,7 +238,100 @@ class MCPManager:
         except Exception as e:
             return False, str(e)[:100]
 
-    # ---- Tavily Server Process Management ----
+    # ---- Generic Stdio Server Process Management ----
+
+    def start_stdio_server(self, name: str) -> tuple[bool, str]:
+        """Start a generic stdio MCP server by name (filesystem_stdio, memory_stdio, etc.).
+
+        Uses npx to run the appropriate @modelcontextprotocol/server-* package.
+        """
+        cfg = self._servers.get(name)
+        if not cfg or cfg.server_type != "stdio":
+            return False, f"找不到 stdio MCP 服务器 '{name}'"
+
+        # Check if already running
+        existing = self._stdio_processes.get(name)
+        if existing is not None and existing.poll() is None:
+            return True, f"{cfg.display_name} 已在运行 (PID: {existing.pid})"
+
+        try:
+            if name == "filesystem_stdio":
+                allowed_dir = cfg.url or "/tmp/mcp-allowed"
+                # Ensure the directory exists
+                Path(allowed_dir).mkdir(parents=True, exist_ok=True)
+                cmd = ["npx", "-y", "@modelcontextprotocol/server-filesystem", allowed_dir]
+            elif name == "memory_stdio":
+                memory_path = cfg.url or "/tmp/mcp-memory"
+                cmd = ["npx", "-y", "@modelcontextprotocol/server-memory", memory_path]
+            else:
+                return False, f"未知的 stdio MCP: {name}"
+
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=str(MCP_CONFIG_DIR),
+            )
+            # Wait briefly to check if it started
+            time.sleep(2)
+            if proc.poll() is not None:
+                stderr = ""
+                try:
+                    if proc.stderr:
+                        stderr = proc.stderr.read(500).decode('utf-8', errors='ignore')
+                except Exception:
+                    pass
+                return False, f"{cfg.display_name} 启动失败: {stderr[:200]}"
+
+            self._stdio_processes[name] = proc
+            return True, f"{cfg.display_name} 已启动 (PID: {proc.pid})"
+
+        except FileNotFoundError:
+            return False, f"找不到 npx 命令，请先安装 Node.js"
+        except Exception as e:
+            self._stdio_processes.pop(name, None)
+            return False, f"启动失败: {e}"
+
+    def stop_stdio_server(self, name: str) -> tuple[bool, str]:
+        """Stop a generic stdio MCP server by name."""
+        proc = self._stdio_processes.get(name)
+        if proc is None:
+            return False, f"MCP 服务器 '{name}' 未运行"
+
+        try:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+            self._stdio_processes.pop(name, None)
+            cfg = self._servers.get(name)
+            display = cfg.display_name if cfg else name
+            return True, f"{display} 已停止"
+        except Exception as e:
+            return False, f"停止失败: {e}"
+
+    def is_stdio_running(self, name: str) -> bool:
+        """Check if a generic stdio MCP server is running."""
+        proc = self._stdio_processes.get(name)
+        if proc is None:
+            return False
+        return proc.poll() is None
+
+    def list_stdio_servers(self) -> List[dict]:
+        """List all stdio servers with their running status."""
+        result = []
+        for name, cfg in self._servers.items():
+            if cfg.server_type == "stdio":
+                running = self.is_stdio_running(name)
+                result.append({
+                    "name": name,
+                    "display_name": cfg.display_name,
+                    "running": running,
+                    "pid": self._stdio_processes[name].pid if running and name in self._stdio_processes else None,
+                })
+        return result
 
     def start_tavily_server(self, tavily_api_key: str = "",
                             proxy: str = "http://localhost:7980") -> tuple[bool, str]:
@@ -368,6 +480,20 @@ class MCPManager:
                     command="npx",
                     args=["-y", "@tavily/mcp@latest"],
                     env=env,
+                )
+            elif cfg.tools_prefix == "filesystem_":
+                # Filesystem MCP — read/write files locally
+                allowed_dir = cfg.url or "/tmp/mcp-allowed"
+                server_params = StdioServerParameters(
+                    command="npx",
+                    args=["-y", "@modelcontextprotocol/server-filesystem", allowed_dir],
+                )
+            elif cfg.tools_prefix == "memory_":
+                # Memory MCP — local knowledge graph
+                memory_path = cfg.url or "/tmp/mcp-memory"
+                server_params = StdioServerParameters(
+                    command="npx",
+                    args=["-y", "@modelcontextprotocol/server-memory", memory_path],
                 )
             else:
                 return {"error": f"stdio transport not supported for: {cfg.name}"}

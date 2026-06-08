@@ -40,37 +40,46 @@ def _has_api_key(provider_name: str) -> bool:
     return bool(key and key.strip() and key.strip() != "no-key" and key.strip() != "YOUR_API_KEY")
 
 
-def _mcp_context(mcp_servers: List[str], topic: str) -> str:
-    """Run MCP pre-search and return context snippet."""
+def _mcp_context(mcp_servers: List[str], topic: str) -> tuple:
+    """Run MCP pre-search and return context snippet + logs."""
     if not mcp_servers:
-        return ""
+        return "", []
+    logs = []
     try:
         from src.mcp.manager import get_mcp_manager
         mgr = get_mcp_manager()
         snippets = []
         for srv in mcp_servers:
+            logs.append(f"🔌 正在调用 MCP 服务器: {srv}")
             try:
                 r = mgr.call_tool(srv, "search", {"query": topic, "max_results": 3})
                 if "error" not in r:
                     parsed = r.get("result", r.get("raw", []))
                     items = parsed.get("results", parsed) if isinstance(parsed, dict) else (parsed if isinstance(parsed, list) else [])
+                    count = 0
                     for item in (items if isinstance(items, list) else [items]):
                         if isinstance(item, dict):
                             snippets.append(f"- {item.get('title','')}: {item.get('content',item.get('snippet',''))[:200]}")
-            except Exception:
+                            count += 1
+                    logs.append(f"  ✅ MCP {srv} 返回 {count} 条结果")
+                else:
+                    logs.append(f"  ⚠️ MCP {srv} 调用错误: {r['error'][:100]}")
+            except Exception as e:
+                logs.append(f"  ❌ MCP {srv} 异常: {str(e)[:100]}")
                 pass
-        return "\nMCP搜索结果：\n" + "\n".join(snippets[:5]) if snippets else ""
-    except Exception:
-        return ""
+        context = "\nMCP搜索结果：\n" + "\n".join(snippets[:5]) if snippets else ""
+        return context, logs
+    except Exception as e:
+        return "", [f"❌ MCP 管理器错误: {str(e)[:100]}"]
 
 
 def _execute_skill(actual: str, topic: str, provider: str, model: str, params: dict):
-    """Execute a skill and return markdown string."""
+    """Execute a skill and return markdown string + steps."""
     ctx = SkillContext(topic=topic, provider_name=provider, model_id=model, custom_params=params)
     sr = get_skill_registry().execute(actual, ctx)
     if sr.success:
-        return sr.content
-    return f"技能执行失败: {sr.error}"
+        return sr.content, sr.steps
+    return f"技能执行失败: {sr.error}", sr.steps
 
 
 async def _execute_skill_with_timeout(actual: str, topic: str, provider: str, model: str, params: dict, timeout: int = 240):
@@ -130,13 +139,17 @@ async def report(req: ReportRequest):
             logs.append("未检测到 API Key，切换至演示模式")
             return ApiResponse(logs=logs, markdown=_demo_content(req.subject, "report"))
 
-        mcp_ctx = _mcp_context(req.mcp_servers, req.subject) if req.mcp_servers else ""
+        mcp_ctx = ""
+        if req.mcp_servers:
+            mcp_ctx, mcp_logs = _mcp_context(req.mcp_servers, req.subject)
+            logs.extend(mcp_logs)
+
         context = req.context or req.field
         if mcp_ctx:
             context = (context or "") + mcp_ctx
 
         actual = req.skill_override if req.skill_override else "research"
-        content = await _execute_skill_with_timeout(actual, req.subject, provider, model, {
+        content, steps = await _execute_skill_with_timeout(actual, req.subject, provider, model, {
             "depth": depth_map.get(req.depth, 3),
             "sources": ["web", "semantic_scholar"],
             "context": context or req.field,
@@ -145,9 +158,19 @@ async def report(req: ReportRequest):
             "request_id": req.request_id,
         })
         logs.append("报告生成完成！")
+
+        # Format steps for display
+        step_logs = []
+        for s in steps:
+            status_icon = {"done": "✅", "running": "⏳", "error": "❌", "warning": "⚠️"}.get(s.get("status", ""), "➖")
+            action = s.get("action", "")
+            query = s.get("query", "")
+            result = s.get("result", "")
+            step_logs.append(f"{status_icon} [{action}] {query[:60] if query else action} {result[:80] if result else ''}")
+
         from src.api.routers.history import save_report
         save_report("report", req.subject, content)
-        return ApiResponse(logs=logs, markdown=content)
+        return ApiResponse(logs=logs + step_logs, markdown=content, steps=steps)
     except Exception as e:
         logs.append(f"❌ 报告生成出错: {str(e)[:200]}")
         return ApiResponse(logs=logs, markdown=f"### ⚠️ 报告生成失败\n\n**错误**: {str(e)[:500]}\n\n请检查服务商配置。")

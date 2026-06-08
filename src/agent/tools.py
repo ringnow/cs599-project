@@ -10,6 +10,8 @@ Search API keys are managed through the same key store as LLM providers.
 """
 import json
 import re
+import time
+import threading
 from typing import Dict, List, Optional
 
 import requests
@@ -17,6 +19,24 @@ import requests
 from src.agent.state import SearchResult
 from src.config import config
 from src.models.key_store import get_key_store
+
+# ============================================================================
+# Rate limiter for Semantic Scholar API (1 req/s limit for free tier)
+# ============================================================================
+
+_semantic_scholar_lock = threading.Lock()
+_semantic_scholar_next_allowed = 0.0
+
+def _rate_limit_semantic_scholar():
+    """Ensure at most 1 request per second to Semantic Scholar API
+    by tracking the earliest allowed time for the NEXT request."""
+    global _semantic_scholar_next_allowed
+    with _semantic_scholar_lock:
+        now = time.time()
+        if now < _semantic_scholar_next_allowed:
+            time.sleep(_semantic_scholar_next_allowed - now)
+        _semantic_scholar_next_allowed = time.time() + 1.0
+
 
 # ============================================================================
 # Web Search — Multiple backends with fallback
@@ -168,31 +188,79 @@ def semantic_scholar_search(query: str, max_results: int = 3) -> List[SearchResu
 
     Free API, optional API key for higher rate limits.
     API key stored securely via the encrypted key store (same as LLM keys).
+
+    Returns enriched SearchResult objects with PDF links, citations, authors, etc.
     """
     try:
         api_key = _get_search_api_key("semantic_scholar")
+        print(f"[SemanticScholar] API key {'✓ found' if api_key else '✗ NOT FOUND'}")
+
+        # Rate limit: free tier allows max 1 req/s
+        _rate_limit_semantic_scholar()
+
         url = "https://api.semanticscholar.org/graph/v1/paper/search"
         headers = {}
         if api_key:
             headers["x-api-key"] = api_key
+        else:
+            print("[SemanticScholar] ⚠️ 未配置 API Key，使用免费接口（可能被限流 429）")
         params = {
             "query": query,
             "limit": min(max_results, 10),
-            "fields": "title,url,abstract,year",
+            "fields": "title,url,abstract,year,paperId,openAccessPdf,citationCount,influentialCitationCount,tldr,publicationTypes,journal,authors",
         }
-        resp = requests.get(url, headers=headers, params=params, timeout=10)
+        resp = requests.get(url, headers=headers, params=params, timeout=30)
         resp.raise_for_status()
         data = resp.json()
         results = []
         for p in data.get("data", []):
+            # Extract open access PDF URL if available
+            pdf_url = ""
+            is_oa = False
+            oa_info = p.get("openAccessPdf")
+            if oa_info and isinstance(oa_info, dict) and oa_info.get("url"):
+                pdf_url = oa_info["url"]
+                is_oa = True
+
+            # Extract TLDR summary
+            tldr = ""
+            tldr_info = p.get("tldr")
+            if tldr_info and isinstance(tldr_info, dict) and tldr_info.get("text"):
+                tldr = tldr_info["text"]
+
+            # Extract authors
+            authors = []
+            for a in p.get("authors", []):
+                if isinstance(a, dict) and a.get("name"):
+                    authors.append(a["name"])
+
+            # Extract journal
+            journal = ""
+            journal_info = p.get("journal")
+            if journal_info and isinstance(journal_info, dict) and journal_info.get("name"):
+                journal = journal_info["name"]
+
             results.append(SearchResult(
                 title=p.get("title", "No title"),
                 url=p.get("url", f"https://www.semanticscholar.org/paper/{p.get('paperId', '')}"),
-                snippet=(p.get("abstract") or "")[:500],
+                snippet=(p.get("abstract") or ""),  # Save FULL abstract, not truncated
                 source="semantic_scholar",
+                pdf_url=pdf_url,
+                is_open_access=is_oa,
+                citation_count=p.get("citationCount", 0),
+                influential_citation_count=p.get("influentialCitationCount", 0),
+                tldr=tldr,
+                publication_types=p.get("publicationTypes", []),
+                journal=journal,
+                authors=authors,
+                year=p.get("year", 0),
+                paper_id=p.get("paperId", ""),
             ))
         if results:
             print(f"[SemanticScholar] returned {len(results)} results")
+            oa_count = sum(1 for r in results if r.is_open_access)
+            if oa_count:
+                print(f"[SemanticScholar]   {oa_count} papers have open access PDFs")
         return results
     except Exception as e:
         print(f"[SemanticScholar] Search failed: {e}")
@@ -209,7 +277,7 @@ def extract_web_content(url: str) -> str:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         }
-        response = requests.get(url, headers=headers, timeout=8)
+        response = requests.get(url, headers=headers, timeout=15)
         response.raise_for_status()
 
         from html.parser import HTMLParser
@@ -241,6 +309,110 @@ def extract_web_content(url: str) -> str:
     except Exception as e:
         print(f"[extract] Content extraction failed for {url}: {e}")
         return ""
+
+
+def extract_paper_content(paper: SearchResult) -> str:
+    """Extract full text content from an academic paper.
+
+    Priority:
+    1. Download and parse Open Access PDF (if available)
+    2. Call Semantic Scholar Paper API for full abstract + TLDR
+    3. Try to fetch paper from arXiv (if applicable)
+    4. Use already available data (abstract + tldr)
+
+    Args:
+        paper: SearchResult with paper metadata
+
+    Returns:
+        Extracted text content (up to 4000 chars)
+    """
+    # Priority 1: Download Open Access PDF
+    if paper.pdf_url and paper.is_open_access:
+        try:
+            print(f"  ⬇️ 正在下载 PDF: {paper.title[:50]}...")
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            }
+            resp = requests.get(paper.pdf_url, headers=headers, timeout=30, stream=True)
+            resp.raise_for_status()
+
+            # Try to parse with PyMuPDF
+            try:
+                import fitz  # PyMuPDF
+                pdf_data = resp.content
+                doc = fitz.open(stream=pdf_data, filetype="pdf")
+                full_text = []
+                for page_num in range(min(len(doc), 10)):
+                    page = doc[page_num]
+                    text = page.get_text()
+                    if text.strip():
+                        full_text.append(text.strip())
+                doc.close()
+
+                if full_text:
+                    content = "\n\n".join(full_text)
+                    if len(content) > 4000:
+                        content = content[:4000]
+                        last_period = content.rfind("。")
+                        last_newline = content.rfind("\n\n")
+                        cut = max(last_period, last_newline)
+                        if cut > 2000:
+                            content = content[:cut+1]
+                    print(f"  ✅ PDF 提取完成: {len(content)} 字")
+                    return content
+            except ImportError:
+                print(f"  ⚠️ PyMuPDF 未安装，跳过 PDF 解析")
+            except Exception as pdf_err:
+                print(f"  ⚠️ PDF 解析失败: {pdf_err}")
+        except Exception as dl_err:
+            print(f"  ⚠️ PDF 下载失败: {dl_err}")
+
+    # Priority 2: Call Semantic Scholar Paper API for full abstract
+    if paper.paper_id:
+        try:
+            _rate_limit_semantic_scholar()
+            api_key = _get_search_api_key("semantic_scholar")
+            headers = {}
+            if api_key:
+                headers["x-api-key"] = api_key
+            url = f"https://api.semanticscholar.org/graph/v1/paper/{paper.paper_id}"
+            params = {"fields": "title,abstract,tldr,year,citationCount,venue,publicationVenue"}
+            resp = requests.get(url, headers=headers, params=params, timeout=15)
+            resp.raise_for_status()
+            data = resp.json()
+
+            parts = []
+            abstract = data.get("abstract", "") or ""
+            if abstract:
+                parts.append(f"[Abstract] {abstract}")
+            tldr_info = data.get("tldr")
+            if tldr_info and isinstance(tldr_info, dict) and tldr_info.get("text"):
+                parts.append(f"[TLDR] {tldr_info['text']}")
+
+            if parts:
+                content = "\n\n".join(parts)
+                if len(content) > 3500:
+                    content = content[:3500]
+                print(f"  ✅ Semantic Scholar API 返回 {len(content)} 字（含完整摘要）")
+                return content
+        except Exception as e:
+            print(f"  ⚠️ S2 API 获取详情失败: {str(e)[:60]}")
+
+    # Priority 3: Use already available data (abstract + tldr)
+    parts = []
+    if paper.tldr:
+        parts.append(f"[TLDR] {paper.tldr}")
+    if paper.snippet:
+        full_abstract = paper.snippet
+        if len(full_abstract) > 2000:
+            full_abstract = full_abstract[:2000]
+        parts.append(f"[Abstract] {full_abstract}")
+    if parts:
+        total = sum(len(p) for p in parts)
+        print(f"  ℹ️ 使用已有摘要/TLDR ({total} 字)")
+        return "\n\n".join(parts)
+
+    return ""
 
 
 # ============================================================================
@@ -293,7 +465,7 @@ def list_search_backends() -> List[Dict]:
             "name": "semantic_scholar",
             "display_name": "Semantic Scholar",
             "description": "学术论文搜索引擎，可选 API Key（免费，提高限频）",
-            "has_key": bool(key_store.get_key("semantic_scholar")),
+            "has_key": bool(key_store.get_key("semantic_scholar_search")),
             "requires_key": True,
             "website": "https://api.semanticscholar.org/",
         },

@@ -73,3 +73,4 @@ class ApiResponse(BaseModel):
     logs: List[str] = []
     markdown: str = ""
     exchange: Optional[List[dict]] = None
+    steps: List[dict] = []

@@ -597,14 +597,14 @@ export default function App() {
           {historyReports.length > 0 && (
             <div className="bg-slate-50/50 border border-gray-100 rounded-xl p-3">
               <label className="block text-[9px] font-bold text-gray-500 uppercase tracking-wider mb-1.5">选择历史记录作为上下文</label>
-              <div className="flex gap-2">
-                <select value={historyId} onChange={e => setHistoryId(e.target.value)} className="flex-1 text-[11px] p-2 border rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500">
+              <div className="flex flex-wrap gap-2 items-center">
+                <select value={historyId} onChange={e => setHistoryId(e.target.value)} className="min-w-0 flex-1 text-[11px] p-2 border rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500">
                   <option value="">-- 选择 --</option>
                   {historyReports.map((h: any) => (
                     <option key={h.id} value={h.id}>[{h.mode}] {h.display_name}</option>
                   ))}
                 </select>
-                <button onClick={() => loadHistoryToContextTab(historyId, setContext)} className="text-[10px] font-semibold text-indigo-600 bg-indigo-50 border border-indigo-100 px-3 py-1.5 rounded-full hover:bg-indigo-100">加载</button>
+                <button onClick={() => loadHistoryToContextTab(historyId, setContext)} className="whitespace-nowrap shrink-0 text-[10px] font-semibold text-white bg-indigo-600 border border-indigo-500 px-4 py-2 rounded-lg hover:bg-indigo-700">加载</button>
               </div>
             </div>
           )}

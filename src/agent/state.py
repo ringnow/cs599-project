@@ -21,6 +21,20 @@ class SearchResult:
     url: str
     snippet: str
     source: str  # 'web' or 'semantic_scholar'
+    # Extended fields for academic papers (Semantic Scholar)
+    pdf_url: str = ""           # Open Access PDF URL if available
+    is_open_access: bool = False
+    citation_count: int = 0
+    influential_citation_count: int = 0
+    tldr: str = ""              # TLDR summary from Semantic Scholar
+    publication_types: list = None  # e.g., ["JournalArticle", "Conference"]
+    journal: str = ""           # Journal name
+    authors: list = None        # List of author names
+    year: int = 0
+    paper_id: str = ""          # Semantic Scholar paper ID
+    content: str = ""           # Full text content after extraction
+    evaluation: str = ""        # LLM evaluation result
+    is_cited: bool = False      # Whether this paper is cited in final report
 
 
 @dataclass

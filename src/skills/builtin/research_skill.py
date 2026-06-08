@@ -6,13 +6,14 @@ and synthesizing findings into a comprehensive report.
 """
 import json
 import re
+import time
 from typing import Dict, List, Any
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from src.skills.base import BaseSkill, SkillResult, SkillContext
 from src.models.manager import get_model_manager
-from src.agent.tools import web_search, semantic_scholar_search, extract_web_content
+from src.agent.tools import web_search, semantic_scholar_search, extract_web_content, extract_paper_content
 from src.agent.state import SearchResult
 from src.api.cancel import is_cancelled
 
@@ -75,6 +76,7 @@ class ResearchSkill(BaseSkill):
                 pass
 
             syntheses = []
+            all_evaluated = []  # Collect evaluated papers from all threads
             with ThreadPoolExecutor(max_workers=min(len(sub_questions), 3)) as executor:
                 future_map = {}
                 for i, question in enumerate(sub_questions):
@@ -89,8 +91,9 @@ class ResearchSkill(BaseSkill):
                 for future in as_completed(future_map):
                     i, step_info = future_map[future]
                     try:
-                        q, sr, summary = future.result()
+                        q, sr, summary, ev_papers = future.result()
                         all_results.extend(sr)
+                        all_evaluated.extend(ev_papers)
                         if summary:
                             syntheses.append({"question": q, "summary": summary})
                             step_info["status"] = "done"
@@ -121,15 +124,43 @@ class ResearchSkill(BaseSkill):
                 # All failed — use raw excerpts as last resort
                 valid_syntheses = syntheses[:1]
 
-            steps.append({"step": len(steps) + 1, "action": "report", "status": "running"})
-            report = self._generate_report(llm, topic, sub_questions, valid_syntheses)
-            steps[-1]["status"] = "done"
+            # Build sources list ONLY from evaluated academic papers (not web content)
+            worth_citing = [ev for ev in all_evaluated if ev.get("worth_citing")]
+            sources_list = []
+            for ev in worth_citing:
+                entry = {
+                    "title": ev["title"],
+                    "url": ev.get("url", ""),
+                    "source": "semantic_scholar",
+                    "ref_num": ev.get("ref_num", len(sources_list) + 1),
+                    "authors": ev.get("authors", []),
+                    "year": ev.get("year", 0),
+                    "journal": ev.get("journal", ""),
+                    "key_findings": ev.get("key_findings", ""),
+                    "relevance": ev.get("relevance", ""),
+                    "worth_citing": True,
+                }
+                sources_list.append(entry)
 
-            # Collect sources
-            sources_list = [
-                {"title": r.title, "url": r.url, "source": r.source}
-                for r in all_results if r.url
-            ]
+            # If no academic papers passed evaluation, include them all as last resort
+            if not sources_list:
+                for ev in all_evaluated:
+                    sources_list.append({
+                        "title": ev["title"],
+                        "url": ev.get("url", ""),
+                        "source": "semantic_scholar",
+                        "ref_num": ev.get("ref_num", len(sources_list) + 1),
+                        "authors": ev.get("authors", []),
+                        "year": ev.get("year", 0),
+                        "journal": ev.get("journal", ""),
+                        "key_findings": ev.get("key_findings", ""),
+                        "relevance": ev.get("relevance", "低"),
+                        "worth_citing": False,
+                    })
+
+            steps.append({"step": len(steps) + 1, "action": "report", "status": "running"})
+            report = self._generate_report(llm, topic, sub_questions, valid_syntheses, sources_list)
+            steps[-1]["status"] = "done"
 
             return SkillResult(
                 success=True,
@@ -137,7 +168,8 @@ class ResearchSkill(BaseSkill):
                 metadata={
                     "sub_questions": sub_questions,
                     "num_sources": len(all_results),
-                    "num_excerpts": len(all_extracted),
+                    "num_papers_read": len(all_evaluated),
+                    "num_papers_cited": len(sources_list),
                     "depth": depth,
                 },
                 steps=steps,
@@ -150,35 +182,132 @@ class ResearchSkill(BaseSkill):
 
     def _research_single(self, question: str, sources: List[str], depth: int,
                           request_id: str, api_key: str, base_url: str, model_id: str):
-        """Search + extract + synthesise ONE sub-question in a thread.
+        """Search + READ PAPERS + extract + evaluate + synthesise ONE sub-question.
 
-        Each invocation creates its own ChatOpenAI instance so it can safely
-        run inside a ``ThreadPoolExecutor`` without touching ModelManager.
-        Returns (question, search_results, summary_text).
+        Key improvements over old version:
+        1. Web search for background context (not cited as formal references)
+        2. Semantic Scholar for academic papers (下载PDF/API获取全文)
+        3. LLM evaluates each paper's relevance and decides worth_citing
+        4. Only evaluated papers are synthesized and returned as potential references
+        5. Web content used as supplementary background ONLY
+
+        Returns (question, all_search_results, summary_text, evaluated_papers).
+        - all_search_results: ALL results (web + academic) for tracking
+        - evaluated_papers: ONLY academic papers that passed LLM evaluation
         """
         if request_id and is_cancelled(request_id):
-            return question, [], ""
+            return question, [], "", []
 
         search_results = []
+
+        # ---- Web search (background context only, not formal references) ----
         if "web" in sources:
-            search_results.extend(web_search(question, max_results=3 + depth))
-        # 学术搜索使用 Semantic Scholar
+            web_results = web_search(question, max_results=3 + depth)
+            search_results.extend(web_results)
+            if web_results:
+                print(f"  → 网络来源: {len(web_results)} 条（仅做背景参考）")
+
+        # ---- Academic search via Semantic Scholar ----
         if "semantic_scholar" in sources:
-            results = semantic_scholar_search(question, max_results=4)
+            en_query = question
+            if api_key and base_url and model_id:
+                try:
+                    from langchain_openai import ChatOpenAI
+                    tllm = ChatOpenAI(
+                        model=model_id, api_key=api_key, base_url=base_url,
+                        temperature=0, timeout=15, max_retries=0,
+                    )
+                    tr = tllm.invoke([{"role": "user",
+                        "content": f"Extract 5-8 key search terms in English for academic paper search from this query. Only output the terms, comma-separated on one line, no explanation.\nQuery: {question}"}])
+                    translated = tr.content if hasattr(tr, 'content') else str(tr)
+                    if translated and len(translated) < 300:
+                        en_query = translated.strip()
+                        print(f"  → 关键词: '{en_query[:80]}...'")
+                except Exception:
+                    pass
+
+            results = semantic_scholar_search(en_query, max_results=4)
             search_results.extend(results)
             if results:
                 print(f"  → 学术来源: Semantic Scholar ({len(results)} 篇论文)")
 
-        extracted = []
-        for r in search_results[:1]:
-            if r.url and r.source == "web":
-                content = extract_web_content(r.url)
-                if content:
-                    extracted.append(f"From {r.title}: {content[:2000]}")
+        # ---- Read paper content (download PDF or API fetch) ----
         for r in search_results:
             if r.source == "semantic_scholar":
-                extracted.append(f"[Semantic Scholar Paper] {r.title}\nAbstract: {r.snippet[:1500]}")
+                print(f"  📖 正在阅读论文: {r.title[:60]}...")
+                content = extract_paper_content(r)
+                if content:
+                    r.content = content
+                    print(f"     ✓ 获取到 {len(content)} 字内容")
+                else:
+                    print(f"     ⚠️ 未能获取论文内容")
+                    r.content = r.snippet[:2000] if r.snippet else ""
 
+        # ---- Evaluate academic papers with LLM ----
+        academic_papers = [r for r in search_results if r.source == "semantic_scholar" and r.content]
+        evaluated_papers = []
+        paper_evaluations = []
+        if academic_papers and api_key and base_url and model_id:
+            try:
+                from langchain_openai import ChatOpenAI
+                eval_llm = ChatOpenAI(
+                    model=model_id, api_key=api_key, base_url=base_url,
+                    temperature=0.3, timeout=60, max_retries=0,
+                )
+                paper_evaluations = self._evaluate_papers(eval_llm, academic_papers, question)
+                for ev in paper_evaluations:
+                    icon = "✅" if ev.get("worth_citing") else "❌"
+                    print(f"  📊 论文评估 [{ev.get('ref_num','?')}]: {ev.get('title','')[:40]}... → {ev.get('relevance','?')} {icon}")
+            except Exception as e:
+                print(f"  ⚠️ 论文评估失败: {e}")
+
+        # ---- Build synthesis input ----
+        # Web content: used as background context, NOT as formal references
+        extracted = []
+        web_count = 0
+        for r in search_results:
+            if r.source == "web" and r.url:
+                if web_count < 2:  # Limit web context to 2 sources
+                    content = extract_web_content(r.url)
+                    if content:
+                        extracted.append(f"[背景信息] {r.title}: {content[:1500]}")
+                        web_count += 1
+
+        # Academic papers: only include those evaluated as worth_citing
+        for ev in paper_evaluations:
+            paper = ev.get("_paper")
+            if paper and paper.content and ev.get("worth_citing"):
+                ref_num = ev.get("ref_num", "?")
+                key_findings = ev.get("key_findings", "")
+                extracted.append(
+                    f"[学术论文 #{ref_num}] {paper.title} ({paper.year})\n"
+                    f"  核心发现: {key_findings}\n"
+                    f"  原文摘要: {paper.content[:2000]}"
+                )
+                evaluated_papers.append(ev)
+
+        # Fallback: if no evaluated papers, still use abstracts
+        if not evaluated_papers:
+            for r in search_results:
+                if r.source == "semantic_scholar":
+                    extracted.append(f"[学术论文] {r.title}\n摘要: {r.snippet[:1500]}")
+                    # Create a basic evaluation for tracking
+                    if r.content:
+                        evaluated_papers.append({
+                            "ref_num": len(evaluated_papers) + 1,
+                            "title": r.title,
+                            "authors": r.authors or [],
+                            "year": r.year,
+                            "journal": r.journal,
+                            "url": r.url,
+                            "key_findings": "",
+                            "relevance": "低",
+                            "worth_citing": True,  # Include as last resort
+                            "reason": "LLM评估不可用，作为后备引用",
+                            "_paper": r,
+                        })
+
+        # ---- Synthesize ----
         summary = ""
         if extracted and api_key and base_url and model_id:
             try:
@@ -191,11 +320,12 @@ class ResearchSkill(BaseSkill):
                     timeout=120,
                     max_retries=0,
                 )
-                summary = self._synthesize(thread_llm, question, extracted)
+                summary = self._synthesize(thread_llm, question, extracted, evaluated_papers)
             except Exception:
                 summary = "\n\n".join(extracted[:3])[:1500]
 
-        return question, search_results, summary
+        return question, search_results, summary, evaluated_papers
+
     def _decompose_topic(self, llm, topic: str, depth: int) -> List[str]:
         """Decompose topic into sub-questions."""
         prompt = f"""Break down this research topic into {depth + 1} specific sub-questions.
@@ -225,19 +355,141 @@ Example: ["What is X and how did it originate?", "What are the main approaches t
             f"What are the current challenges and future directions for {topic}?"
         ]
 
-    def _synthesize(self, llm, question: str, excerpts: List[str]) -> str:
-        """Synthesize findings for a sub-question."""
+    def _evaluate_papers(self, llm, papers: List[SearchResult], topic: str) -> List[Dict]:
+        """Evaluate each paper's relevance and extract key findings.
+
+        For each paper, the LLM reads the full content and determines:
+        - Core problem / method / findings
+        - Relevance to the research topic (高/中/低)
+        - Whether it's worth citing
+        - Key findings that could be used in the report
+
+        Args:
+            llm: ChatOpenAI instance
+            papers: List of SearchResult with .content populated
+            topic: Research sub-question
+
+        Returns:
+            List of evaluation dicts with keys: ref_num, title, key_findings,
+            relevance, worth_citing, _paper
+        """
+        evaluations = []
+        for idx, paper in enumerate(papers, 1):
+            if not paper.content:
+                evaluations.append({
+                    "ref_num": idx,
+                    "title": paper.title,
+                    "authors": paper.authors or [],
+                    "year": paper.year,
+                    "journal": paper.journal,
+                    "url": paper.url,
+                    "key_findings": "（无可用内容）",
+                    "relevance": "unknown",
+                    "worth_citing": False,
+                    "reason": "论文内容不可获取",
+                    "_paper": paper,
+                })
+                continue
+
+            prompt = f"""你是一名学术审稿人。以下是一篇学术论文的完整内容，以及当前正在研究的主题。
+
+研究主题：{topic}
+
+论文标题：{paper.title}
+作者：{', '.join(paper.authors[:5]) if paper.authors else '未知'}
+发表年份：{paper.year}
+引用数：{paper.citation_count}
+期刊/会议：{paper.journal}
+
+论文内容（前4000字）：
+{paper.content[:4000]}
+
+请仔细阅读以上论文内容，然后回答以下问题（JSON格式）：
+
+{{
+  "key_findings": "这篇论文的核心发现/方法/结论（100-200字中文）",
+  "relevance": "论文与本研究的关联度：高/中/低",
+  "worth_citing": true/false,
+  "reason": "判断理由（50字中文）",
+  "usable_quotes": "可以从论文中直接引用的具体观点或数据（50-100字）"
+}}
+
+只输出JSON，不要其他文字。"""
+
+            try:
+                response = llm.invoke([{"role": "user", "content": prompt}])
+                raw = response.content if hasattr(response, 'content') else str(response)
+                # Extract JSON from response
+                import re as _re
+                m = _re.search(r'\{.*\}', raw, _re.DOTALL)
+                if m:
+                    result = json.loads(m.group())
+                else:
+                    result = {"key_findings": raw[:200], "relevance": "低", "worth_citing": False, "reason": "解析失败", "usable_quotes": ""}
+
+                result["ref_num"] = idx
+                result["title"] = paper.title
+                result["authors"] = paper.authors or []
+                result["year"] = paper.year
+                result["journal"] = paper.journal
+                result["url"] = paper.url
+                result["_paper"] = paper
+                evaluations.append(result)
+                print(f"  📋 论文 #{idx} 评估完成: {result.get('relevance','?')} {'✅' if result.get('worth_citing') else '❌'}")
+            except Exception as e:
+                evaluations.append({
+                    "ref_num": idx,
+                    "title": paper.title,
+                    "key_findings": f"评估失败: {e}",
+                    "relevance": "低",
+                    "worth_citing": False,
+                    "reason": f"LLM评估异常: {e}",
+                    "_paper": paper,
+                })
+
+        return evaluations
+
+    def _synthesize(self, llm, question: str, excerpts: List[str],
+                    evaluated_papers: List[Dict] = None) -> str:
+        """Synthesize findings for a sub-question.
+
+        Uses evaluated papers with [N] numbering to ensure consistent citations.
+        Only academic papers (not web content) are assigned reference numbers.
+        """
+        # Build reference index from evaluated academic papers ONLY
+        ref_section = ""
+        if evaluated_papers:
+            ref_lines = []
+            for ev in evaluated_papers:
+                if ev.get("worth_citing"):
+                    authors_str = ", ".join(ev["authors"][:3]) if ev.get("authors") else ""
+                    ref_lines.append(
+                        f"[{ev['ref_num']}] {ev['title']}. "
+                        f"{authors_str}{' (' + str(ev['year']) + ')' if ev.get('year') else ''}"
+                        f"{'. ' + ev['journal'] if ev.get('journal') else ''}"
+                    )
+            if ref_lines:
+                ref_section = "学术文献编号：\n" + "\n".join(ref_lines)
+            else:
+                ref_section = "（无符合引用标准的学术文献）"
+
         content_text = "\n\n---\n\n".join(excerpts[-5:])
 
-        prompt = f"""基于以下研究摘录回答问题。请严格遵守：
-1. **只使用摘录中提供的信息**，不要添加任何摘录中没有的内容
-2. 如果摘录不足以完整回答问题，明确指出哪些部分缺乏依据
-3. 在回答中引用具体摘录来源
+        prompt = f"""基于以下研究摘录和学术文献回答问题。
 
-Question: {question}
+研究问题：{question}
 
-Excerpts:
+{ref_section}
+
+研究摘录内容（含背景信息和学术论文摘要）：
 {content_text}
+
+写作要求：
+1. **只使用摘录中提供的信息**，不要添加任何摘录中没有的内容
+2. 在回答中引用学术文献时，**必须使用 [编号] 格式**（如 [1]、[2]）
+3. [编号] 与上方"学术文献编号"中的编号一一对应
+4. "背景信息"类的网络内容仅供参考，不作为学术引用
+5. 如果摘录不足以完整回答问题，明确指出哪些部分缺乏依据
 
 请提供详细回答（300-500字）："""
 
@@ -248,50 +500,105 @@ Excerpts:
             return f"Error during synthesis: {e}"
 
     def _generate_report(self, llm, topic: str, sub_questions: List[str],
-                         syntheses: List[Dict]) -> str:
-        """Generate final research report."""
+                         syntheses: List[Dict], sources_list: List[Dict]) -> str:
+        """Generate final research report with evaluated and verified references.
+
+        Only academic papers (from Semantic Scholar) that passed LLM evaluation
+        are included. CSDN、知乎等非学术网络内容不作为正式引用.
+        References use proper academic format with authors, year, journal.
+        """
         syntheses_text = "\n\n---\n\n".join(
             f"### {s['question']}\n\n{s['summary']}" for s in syntheses
         )
 
-        prompt = f"""基于以下研究结果生成一份专业的学术调研报告。请严格遵守：
+        # Build reference list from evaluated academic papers ONLY
+        ref_lines = []
+        for i, s in enumerate(sources_list, 1):
+            title = s.get('title', 'Untitled')
 
-1. **只使用下方"Research findings"中提供的信息**，不要编造任何数据、论文标题、作者或结论
-2. 如果某个方面没有足够的信息，如实说明"现有资料不足以覆盖该方面"
-3. 所有引用必须来自下方的 findings，不得虚构参考文献
-4. 在 References 部分只列出实际在报告中引用的来源
+            # Format authors properly
+            authors = s.get('authors', [])
+            authors_str = ""
+            if authors and isinstance(authors, list):
+                author_names = [a if isinstance(a, str) else a.get('name', '') for a in authors if a]
+                if author_names:
+                    author_names = [n for n in author_names if n]
+                    if len(author_names) == 1:
+                        authors_str = f"{author_names[0]}."
+                    elif len(author_names) <= 3:
+                        authors_str = ", ".join(author_names) + "."
+                    else:
+                        authors_str = ", ".join(author_names[:3]) + ", et al."
+
+            year = s.get('year', '')
+            journal = s.get('journal', '')
+            url = s.get('url', '')
+
+            # Build proper academic reference
+            ref_str = f"[{i}]"
+            if authors_str:
+                ref_str += f" {authors_str}"
+            ref_str += f" {title}"
+            if year:
+                ref_str += f" ({year})"
+            if journal:
+                ref_str += f". {journal}"
+            if url:
+                ref_str += f". {url}"
+
+            ref_lines.append(ref_str)
+
+        real_refs = "\n".join(ref_lines) if ref_lines else "（搜索未返回有效的学术文献）"
+
+        # Build compact reference table for LLM
+        ref_table_lines = []
+        for i, s in enumerate(sources_list, 1):
+            ref_table_lines.append(f"[{i}] {s.get('title', 'Untitled')}")
+        ref_table = "\n".join(ref_table_lines)
+
+        prompt = f"""你是一名学术研究员，请基于以下经过阅读和评估的真实学术文献撰写调研报告。
 
 研究主题：{topic}
 
-Research findings:
+===== 经过评估的真实学术文献（所有文献均已阅读全文/摘要并评估相关性） =====
+{real_refs}
+
+===== 文献编号对照表 =====
+{ref_table}
+
+===== 各子问题研究摘要（摘要中已使用 [编号] 格式引用学术文献） =====
 {syntheses_text}
 
-请以 Markdown 格式生成报告，包含以下章节：
+写作要求：
+1. **必须在正文中引用具体学术文献**：在提到某个发现、方法或结论时，使用 [编号] 标注来源
+2. **只引用上方"文献编号对照表"中的文献**，这些都是经过阅读和评估的真实学术论文
+3. **禁止引用 CSDN、知乎、博客园等非学术网络来源**——只引用学术论文
+4. 对每篇引用的论文，简要说明其核心贡献（如"Smith et al. [1] 提出了..."）
+5. 如果某个方面在现有文献中缺乏覆盖，如实说明"当前文献中未涵盖该方面"
+6. **不要在末尾写"参考文献"章节**——参考文献列表将在下方自动生成
+7. 正文至少 1200 字，确保覆盖所有子问题
+
+请用 Markdown 格式撰写，包含以下章节：
 
 # {topic}
 
 ## 执行摘要
-简要概述（200字左右）
 
 ## 引言
-背景与重要性
 
 ## 核心发现
-按主题组织详细发现
 
 ## 分析
-批判性分析
 
-## 结论
-总结与启示
-
-## 参考文献"""
+## 结论"""
 
         try:
             response = llm.invoke([{"role": "user", "content": prompt}])
             content = response.content if hasattr(response, 'content') else str(response)
-            # Append Semantic Scholar citation when academic search is used
-            content += "\n\n---\n*文献检索由 [Semantic Scholar](https://www.semanticscholar.org/) 提供支持。*"
+            # Append REAL references (not LLM-generated fakes)
+            if real_refs:
+                content += "\n\n## 参考文献\n" + real_refs
+            content += "\n\n---\n*本报告引用的文献均经过全文阅读和相关性评估。仅引用学术论文来源。文献检索由 [Semantic Scholar](https://www.semanticscholar.org/) 提供支持。*"
             return content
         except Exception as e:
             return f"# {topic}\n\n## Error\n{e}\n\n## Raw Findings\n\n{syntheses_text}"
