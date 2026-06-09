@@ -578,6 +578,37 @@ export default function App() {
     showToast("计算强行中断");
   };
 
+  // Export handler: send current markdown to backend for Word/PDF conversion
+  const handleExport = async (fmt: string) => {
+    if (!currentMarkdown) return;
+    showToast(`正在生成 ${fmt.toUpperCase()}...`);
+    try {
+      const res = await fetch("/api/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          content: currentMarkdown,
+          format: fmt,
+          title: "CS599 Research Report",
+          author: "",
+          language: "en",
+        }),
+      });
+      if (!res.ok) { showToast(`导出失败`); return; }
+      const data = await res.json();
+      if (data.url) {
+        // Trigger download by creating a temporary link
+        const a = document.createElement("a");
+        a.href = data.url;
+        a.download = data.filename || `report.${fmt}`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        showToast(`${fmt.toUpperCase()} 导出成功！`);
+      }
+    } catch { showToast("导出失败，请检查后端连接"); }
+  };
+
   // General trigger execution handler for standard tabs
   const handleRunTask = async (taskType: Tab) => {
     if (isLoading) return;
@@ -2137,9 +2168,17 @@ export default function App() {
                     <MarkdownRenderer text={currentMarkdown} />
                   </div>
                   {currentMarkdown && !isLoading && (
-                    <button onClick={() => { const blob = new Blob([currentMarkdown], {type:'text/markdown'}); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `cs599_output_${Date.now()}.md`; a.click(); URL.revokeObjectURL(url); }} className="w-full py-3 rounded-full text-xs font-bold text-center text-white tracking-wide bg-slate-900 hover:bg-slate-800 transition-all shadow-md mt-4">
-                      ⬇️ 下载结果 .md
-                    </button>
+                    <div className="flex gap-3 mt-4">
+                      <button onClick={() => { const blob = new Blob([currentMarkdown], {type:'text/markdown'}); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `cs599_output_${Date.now()}.md`; a.click(); URL.revokeObjectURL(url); }} className="flex-1 py-3 rounded-full text-xs font-bold text-center text-white tracking-wide bg-slate-900 hover:bg-slate-800 transition-all shadow-md">
+                        ⬇️ 下载 .md
+                      </button>
+                      <button onClick={() => handleExport("docx")} className="flex-1 py-3 rounded-full text-xs font-bold text-center text-white tracking-wide bg-indigo-600 hover:bg-indigo-700 transition-all shadow-md">
+                        📄 导出 Word
+                      </button>
+                      <button onClick={() => handleExport("pdf")} className="flex-1 py-3 rounded-full text-xs font-bold text-center text-white tracking-wide bg-emerald-600 hover:bg-emerald-700 transition-all shadow-md">
+                        📕 导出 PDF
+                      </button>
+                    </div>
                   )}
                 </div>
               )}

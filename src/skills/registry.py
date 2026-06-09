@@ -40,7 +40,7 @@ class SkillRegistry:
         from src.skills.builtin.survey_skill import SurveyWritingSkill
         from src.skills.builtin.code_review_skill import CodeReviewSkill
         from src.skills.builtin.literature_review_skill import LiteratureReviewSkill
-        from src.skills.builtin.word_export_skill import WordExportSkill
+        from src.skills.builtin.office_skill import OfficeExportSkill
 
         builtin = [
             ResearchSkill,
@@ -48,7 +48,7 @@ class SkillRegistry:
             SurveyWritingSkill,
             CodeReviewSkill,
             LiteratureReviewSkill,
-            WordExportSkill,
+            OfficeExportSkill,
         ]
 
         for skill_cls in builtin:
