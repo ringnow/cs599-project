@@ -16,7 +16,7 @@ async def download_file(filename: str):
         raise HTTPException(status_code=400, detail="Invalid filename")
     filepath = OUTPUT_DIR / filename
     if not filepath.exists():
-        raise HTTPException(status_code=404, detail="File not found")
+        raise HTTPException(status_code=404, detail=f"File not found: {filepath}")
     return FileResponse(
         path=str(filepath),
         filename=filename,

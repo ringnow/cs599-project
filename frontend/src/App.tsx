@@ -581,8 +581,8 @@ export default function App() {
 
   // Export handler: send current markdown to backend for Word/PDF conversion
   const handleExport = async (fmt: string) => {
-    if (!currentMarkdown) return;
-    showToast(`正在生成 ${fmt.toUpperCase()}...`);
+    if (!currentMarkdown || exporting) return;
+    setExporting(fmt);
     try {
       const res = await fetch("/api/export", {
         method: "POST",
@@ -595,10 +595,9 @@ export default function App() {
           language: "en",
         }),
       });
-      if (!res.ok) { showToast(`导出失败`); return; }
+      if (!res.ok) { showToast(`导出失败`); setExporting(""); return; }
       const data = await res.json();
       if (data.url) {
-        // Trigger download by creating a temporary link
         const a = document.createElement("a");
         a.href = data.url;
         a.download = data.filename || `report.${fmt}`;
@@ -606,8 +605,13 @@ export default function App() {
         a.click();
         document.body.removeChild(a);
         showToast(`${fmt.toUpperCase()} 导出成功！`);
+      } else {
+        showToast("导出失败：服务器未返回文件地址");
       }
-    } catch { showToast("导出失败，请检查后端连接"); }
+    } catch {
+      showToast("导出失败，请检查后端连接");
+    }
+    setExporting("");
   };
 
   // General trigger execution handler for standard tabs

@@ -1,18 +1,86 @@
-"""Office Export Skill — Convert research reports to Word (.docx) and PDF.
+"""Office Export Skill — Export reports to Word (.docx) with optional PDF conversion.
 
-References the report structure from Codex Academic Skills (office-academic-skill).
-Default language: English; also supports Chinese.
+Workflow:
+  Always generate .docx first. If PDF requested, convert .docx -> PDF via LibreOffice.
+  Inline markdown formatting (**bold**, *italic*, `code`, [links](url)) is properly
+  rendered in Word output - no raw markdown symbols leak through.
 """
 import re
-import time
+import subprocess
 from pathlib import Path
-from typing import List, Dict
+from typing import List, Optional
 from datetime import datetime
 
 from src.skills.base import BaseSkill, SkillResult, SkillContext
 
-# Output directory
 OUTPUT_DIR = Path.home() / ".cs599-agent" / "output"
+
+
+# ---------------------------------------------------------------------------
+# Inline markdown -> python-docx runs
+# ---------------------------------------------------------------------------
+
+
+def _apply_inline_md(paragraph, text: str):
+    """Parse inline markdown tokens in *text* and add formatted runs to *paragraph*.
+
+    Supported: **bold**  *italic*  `code`  [link](url)  ~~strikethrough~~
+    """
+    from docx.shared import Pt, RGBColor
+
+    pattern = re.compile(
+        r'\*\*(.+?)\*\*'                             # **bold**
+        r'|\*(.+?)\*'                                # *italic*
+        r'|`(.+?)`'                                   # `code`
+        r'|\[(.+?)\]\((.+?)\)'                       # [link](url)
+        r'|~~(.+?)~~'                                 # ~~strikethrough~~
+    )
+
+    last_end = 0
+    for m in pattern.finditer(text):
+        if m.start() > last_end:
+            run = paragraph.add_run(text[last_end:m.start()])
+            run.font.name = 'Times New Roman'
+            run.font.size = Pt(11)
+
+        run = None
+        grp1, grp2, grp3, grp4, grp5, grp6 = m.groups()
+        if grp1:      # **bold**
+            run = paragraph.add_run(grp1)
+            run.bold = True
+        elif grp2:    # *italic*
+            run = paragraph.add_run(grp2)
+            run.italic = True
+        elif grp3:    # `code`
+            run = paragraph.add_run(grp3)
+            run.font.name = 'Consolas'
+            run.font.size = Pt(9)
+        elif grp4:    # [link](url)
+            run = paragraph.add_run(grp4)
+            run.font.color.rgb = RGBColor(0, 102, 204)
+            run.underline = True
+        elif grp6:    # ~~strikethrough~~
+            run = paragraph.add_run(grp6)
+            run.font.strike = True
+
+        if run is not None:
+            run.font.name = run.font.name or 'Times New Roman'
+            run.font.size = run.font.size or Pt(11)
+
+        last_end = m.end()
+
+    if last_end < len(text):
+        run = paragraph.add_run(text[last_end:])
+        run.font.name = 'Times New Roman'
+        run.font.size = Pt(11)
+
+
+def _add_plain_para(doc, text: str, style=None):
+    """Add an empty paragraph with the given style, then apply inline markdown."""
+    p = doc.add_paragraph(style=style)
+    if text:
+        _apply_inline_md(p, text)
+    return p
 
 
 # ── DOCX generation ──────────────────────────────────────────────────────────
@@ -35,13 +103,6 @@ def _render_docx(markdown_text: str, title: str, author: str, language: str) -> 
     pf.space_after = Pt(6)
     pf.line_spacing = 1.15
     style.element.rPr.rFonts.set(qn('w:eastAsia'), '宋体')
-
-    # ── Helper: add a styled heading ──
-    def add_heading(text: str, level: int):
-        h = doc.add_heading(text, level=level)
-        for run in h.runs:
-            run.font.name = 'Times New Roman'
-        return h
 
     # ── Title page ──
     for _ in range(6):
@@ -88,11 +149,6 @@ def _render_docx(markdown_text: str, title: str, author: str, language: str) -> 
         ap_r.font.size = Pt(10)
         ap_r.font.name = 'Times New Roman'
         ap_r.font.color.rgb = RGBColor(80, 80, 80)
-
-    doc.add_page_break()
-
-    # ── Markdown parser (same as before, but uses structured headings) ──
-    dr.font.color.rgb = RGBColor(100, 100, 100)
 
     doc.add_page_break()
 
@@ -197,23 +253,27 @@ def _render_docx(markdown_text: str, title: str, author: str, language: str) -> 
 
         # Heading 1
         if line.startswith('# ') and not line.startswith('## '):
-            doc.add_heading(line[2:], level=1)
+            h = doc.add_heading(line[2:], level=1)
+            for run in h.runs:
+                run.font.name = 'Times New Roman'
         # Heading 2
         elif line.startswith('## ') and not line.startswith('### '):
-            doc.add_heading(line[3:], level=2)
+            h = doc.add_heading(line[3:], level=2)
+            for run in h.runs:
+                run.font.name = 'Times New Roman'
         # Heading 3
         elif line.startswith('### '):
-            doc.add_heading(line[4:], level=3)
-        # Blockquote
+            h = doc.add_heading(line[4:], level=3)
+            for run in h.runs:
+                run.font.name = 'Times New Roman'
+        # Blockquote (with inline formatting)
         elif line.startswith('> '):
             p = doc.add_paragraph()
-            r = p.add_run(line[2:])
-            r.italic = True
-            r.font.size = Pt(11)
-            r.font.color.rgb = RGBColor(80, 80, 80)
-            pf = p.paragraph_format
-            pf.left_indent = Inches(0.3)
-            # Add left border effect
+            _apply_inline_md(p, line[2:])
+            for run in p.runs:
+                run.italic = True
+            ppf = p.paragraph_format
+            ppf.left_indent = Inches(0.3)
             pPr = p._p.get_or_add_pPr()
             pBdr = OxmlElement('w:pBdr')
             left = OxmlElement('w:left')
@@ -222,17 +282,17 @@ def _render_docx(markdown_text: str, title: str, author: str, language: str) -> 
             left.set(qn('w:color'), '888888')
             pBdr.append(left)
             pPr.append(pBdr)
-        # List item
+        # List item (with inline formatting)
         elif re.match(r'^[\-\*]\s', line):
-            p = doc.add_paragraph(line[2:], style='List Bullet')
+            _add_plain_para(doc, line[2:], style='List Bullet')
         elif re.match(r'^\d+\.\s', line):
-            p = doc.add_paragraph(re.sub(r'^\d+\.\s', '', line), style='List Number')
+            _add_plain_para(doc, re.sub(r'^\d+\.\s', '', line), style='List Number')
         # Empty line
         elif line.strip() == '':
             pass
-        # Regular paragraph
+        # Regular paragraph (with inline formatting)
         else:
-            p = doc.add_paragraph(line)
+            _add_plain_para(doc, line)
 
         i += 1
 
@@ -250,198 +310,82 @@ def _render_docx(markdown_text: str, title: str, author: str, language: str) -> 
     return path
 
 
-# ── PDF generation ───────────────────────────────────────────────────────────
-def _render_pdf(markdown_text: str, title: str, author: str, language: str) -> Path:
-    """Convert Markdown to PDF using fpdf2."""
-    from fpdf import FPDF
+# ── DOCX → PDF conversion (via LibreOffice) ────────────────────────────────
 
-    class AcademicPDF(FPDF):
-        def __init__(self):
-            super().__init__()
-            self.title_short = title[:60] if title else "Report"
+def _convert_docx_to_pdf(docx_path: Path) -> Optional[Path]:
+    """Convert .docx → PDF using LibreOffice headless CLI.
 
-        def header(self):
-            if self.page_no() > 1:
-                self.set_font('Times', 'I', 8)
-                self.set_text_color(150, 150, 150)
-                self.cell(0, 8, self.title_short, align='R')
-                self.ln(4)
-
-        def footer(self):
-            self.set_y(-15)
-            self.set_font('Times', 'I', 8)
-            self.set_text_color(150, 150, 150)
-            self.cell(0, 10, str(self.page_no()), align='C')
-
-    pdf = AcademicPDF()
-    pdf.set_auto_page_break(auto=True, margin=20)
-
-    # Try to add Chinese font (NotoSansSC) if available
-    font_paths = [
-        Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
-        Path("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc"),
-        Path.home() / ".fonts" / "NotoSansSC-Regular.ttf",
-    ]
-    has_cn_font = False
-    cn_font_name = 'CN'
-    for fp in font_paths:
-        if fp.exists():
-            pdf.add_font(cn_font_name, '', str(fp), uni=True)
-            has_cn_font = True
-            break
-
-    def write_h(text: str, size: int):
-        """Write heading - use larger size, no bold style to avoid fpdf2 font derivation issues."""
-        pdf.set_font('Times', 'B', size)
-        pdf.multi_cell(0, size * 0.5, text)
-        pdf.ln(2)
-
-    def write_p(text: str, size: int = 11):
-        """Write paragraph."""
-        pdf.set_font('Times', '', size)
-        pdf.multi_cell(0, 5, text)
-
-    # Title page
-    pdf.add_page()
-    pdf.ln(40)
-    pdf.set_font('Times', 'B', 24)
-    pdf.multi_cell(0, 12, title or "Research Report", align='C')
-    pdf.ln(10)
-    if author:
-        pdf.set_font('Times', '', 14)
-        pdf.cell(0, 10, f"Author: {author}", align='C', new_x="LMARGIN", new_y="NEXT")
-    pdf.add_page()
-    pdf.ln(40)
-    pdf.set_font('Times', 'B', 24)
-    pdf.multi_cell(0, 12, title or "Research Report", align='C')
-    pdf.ln(10)
-    if author:
-        pdf.set_font('Times', '', 14)
-        pdf.cell(0, 10, f"Author: {author}", align='C', new_x="LMARGIN", new_y="NEXT")
-        pdf.ln(5)
-    pdf.set_font('Times', '', 11)
-    pdf.set_text_color(100, 100, 100)
-    pdf.cell(0, 10, datetime.now().strftime("%B %d, %Y"), align='C')
-    pdf.set_text_color(0, 0, 0)
-    pdf.add_page()
-
-    # Markdown parser
-    lines = markdown_text.split('\n')
-    i = 0
-    in_code = False
-    code_buf: List[str] = []
-
-    def get_font():
-        return 'CN' if has_cn_font else 'Times'
-
-    def write_code():
-        if not code_buf:
-            return
-        pdf.set_fill_color(245, 245, 245)
-        pdf.set_font('Courier', '', 8)
-        for cl in code_buf:
-            pdf.multi_cell(0, 4.5, cl)
-        pdf.ln(3)
-        code_buf.clear()
-
-    while i < len(lines):
-        line = lines[i]
-
-        if line.strip().startswith('```'):
-            if in_code:
-                in_code = False
-                write_code()
-            else:
-                in_code = True
-            i += 1
-            continue
-        if in_code:
-            code_buf.append(line)
-            i += 1
-            continue
-
-        # Skip table separator lines (too complex for basic PDF, render as text)
-        if line.strip().startswith('|') and line.strip().endswith('|'):
-            if re.match(r'^\|[\s\-:]+\|', line):
-                i += 1
-                continue
-            # Render table line as text with tabs
-            cols = [c.strip() for c in line.split('|')[1:-1]]
-            pdf.set_font('Times', '', 9)
-            pdf.cell(0, 6, ' | '.join(cols))
-            pdf.ln()
-            i += 1
-            continue
-
-        if line.startswith('# ') and not line.startswith('## '):
-            write_h(line[2:], 16)
-        elif line.startswith('## ') and not line.startswith('### '):
-            write_h(line[3:], 14)
-        elif line.startswith('### '):
-            write_h(line[4:], 12)
-        elif line.startswith('> '):
-            pdf.set_font('Times', 'I', 10)
-            pdf.set_x(pdf.get_x() + 8)
-            pdf.multi_cell(0, 5, line[2:], new_x="LMARGIN")
-            pdf.ln(1)
-        elif line.strip() == '':
-            pdf.ln(3)
-        else:
-            write_p(line)
-        i += 1
-
-    if in_code:
-        write_code()
-
-    safe_title = re.sub(r'[^\w\s\-]', '', title)[:40] or "report"
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    path = OUTPUT_DIR / f"{safe_title}_{ts}.pdf"
-    pdf.output(str(path))
-    return path
+    Returns the PDF path on success, or *None* if conversion fails.
+    """
+    pdf_path = docx_path.with_suffix('.pdf')
+    try:
+        subprocess.run(
+            ['libreoffice', '--headless', '--convert-to', 'pdf',
+             '--outdir', str(OUTPUT_DIR), str(docx_path)],
+            check=True, capture_output=True, timeout=120,
+        )
+        return pdf_path if pdf_path.exists() else None
+    except (subprocess.CalledProcessError, FileNotFoundError,
+            subprocess.TimeoutExpired):
+        return None
 
 
 # ── Skill class ──────────────────────────────────────────────────────────────
 class OfficeExportSkill(BaseSkill):
-    """Export markdown content to Word (.docx) or PDF.
+    """Export markdown content to Word (.docx).  Optionally convert to PDF.
 
-    References the report structure from Codex office-academic-skill.
-    Default language: English; supports Chinese via language='zh'.
+    Workflow:
+      1. Always generate .docx (with proper inline formatting).
+      2. If ``format="pdf"``, convert .docx → PDF via LibreOffice.
+      3. Return the download URL of the final file.
     """
     name = "office_export"
     display_name = "学术文档导出"
-    description = "将研究报告/论文导出为 Word (.docx) 或 PDF 格式。支持英文和中文。"
-    version = "1.0.0"
+    description = "将研究报告/论文导出为 Word (.docx) 格式，或进一步转为 PDF。"
+    version = "1.1.0"
     author = "CS599 Agent"
     tags = ["export", "office", "word", "pdf"]
 
     parameters_schema = {
-        "content": {"type": "string", "description": "要导出的 Markdown 内容", "required": True},
-        "format": {"type": "string", "description": "输出格式", "options": ["docx", "pdf"], "default": "docx"},
-        "title": {"type": "string", "description": "文档标题", "default": "Research Report"},
-        "author": {"type": "string", "description": "作者名", "default": "CS599 Research Assistant"},
-        "language": {"type": "string", "description": "语言", "options": ["en", "zh"], "default": "en"},
+        "content": {"type": "string",
+                     "description": "要导出的 Markdown 内容", "required": True},
+        "format": {"type": "string",
+                    "description": "输出格式", "options": ["docx", "pdf"],
+                    "default": "docx"},
+        "title": {"type": "string",
+                   "description": "文档标题", "default": "Research Report"},
+        "author": {"type": "string",
+                    "description": "作者名",
+                    "default": "CS599 Research Assistant"},
+        "language": {"type": "string",
+                      "description": "语言", "options": ["en", "zh"],
+                      "default": "en"},
     }
 
     def execute(self, context: SkillContext) -> SkillResult:
         content = context.custom_params.get("content", "")
         fmt = context.custom_params.get("format", "docx")
         title = context.custom_params.get("title", "Research Report")
-        author = context.custom_params.get("author", "CS599 Research Assistant")
+        author = context.custom_params.get(
+            "author", "CS599 Research Assistant")
         language = context.custom_params.get("language", "en")
 
         if not content:
             return SkillResult(success=False, error="No content provided")
 
-        # If content is short (likely not a full report), wrap it
         if len(content) < 100:
             content = f"# {title}\n\n{content}"
 
         try:
+            # Step 1: always generate .docx
+            docx_path = _render_docx(content, title, author, language)
+            path = docx_path
+
+            # Step 2: optionally convert to PDF
             if fmt == "pdf":
-                path = _render_pdf(content, title, author, language)
-            else:
-                path = _render_docx(content, title, author, language)
+                pdf_path = _convert_docx_to_pdf(docx_path)
+                if pdf_path:
+                    path = pdf_path
 
             filename = path.name
             download_url = f"/api/download/{filename}"
@@ -451,7 +395,7 @@ class OfficeExportSkill(BaseSkill):
                 content=download_url,
                 metadata={
                     "filename": filename,
-                    "format": fmt,
+                    "format": "pdf" if (fmt == "pdf" and path.suffix == ".pdf") else "docx",
                     "path": str(path),
                     "size": path.stat().st_size,
                 },
@@ -463,4 +407,4 @@ class OfficeExportSkill(BaseSkill):
                 error=f"缺少依赖库: {missing}。请运行: pip install python-docx fpdf2",
             )
         except Exception as e:
-            return SkillResult(success=False, error=f"文档导出失败: {e}")
+            return SkillResult(success=False, error=str(e))
