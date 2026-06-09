@@ -288,6 +288,37 @@ def _render_docx(markdown_text: str, title: str, author: str, language: str) -> 
         elif re.match(r'^\d+\.\s', line):
             _add_plain_para(doc, re.sub(r'^\d+\.\s', '', line), style='List Number')
         # Empty line
+        # Image ![alt](path)
+        elif (match_img := re.match(r'!\[(.*?)\]\((.+?)\)', line.strip())):
+            img_alt = match_img.group(1)
+            img_path = match_img.group(2)
+            try:
+                from docx.shared import Inches as _Inches
+                # Resolve relative path against OUTPUT_DIR parent
+                abs_path = Path(img_path)
+                if not abs_path.is_absolute():
+                    abs_path = OUTPUT_DIR.parent / img_path
+                if abs_path.exists():
+                    # Add image centered
+                    img_para = doc.add_paragraph()
+                    img_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    run = img_para.add_run()
+                    run.add_picture(str(abs_path), width=_Inches(5.0))
+                    # Add caption below image
+                    if img_alt:
+                        cap = doc.add_paragraph()
+                        cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                        cap_r = cap.add_run(img_alt)
+                        cap_r.font.size = Pt(9)
+                        cap_r.font.name = 'Times New Roman'
+                        cap_r.italic = True
+                        cap_r.font.color.rgb = RGBColor(80, 80, 80)
+                else:
+                    # Image file not found — fall back to text
+                    _add_plain_para(doc, f"[Image: {img_alt}] ({img_path})")
+            except Exception:
+                _add_plain_para(doc, f"[Image: {img_alt}]")
+        # Empty line
         elif line.strip() == '':
             pass
         # Regular paragraph (with inline formatting)

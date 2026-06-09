@@ -57,11 +57,16 @@ def _execute_skill(actual: str, topic: str, provider: str, model: str, params: d
     return f"技能执行失败: {sr.error}", sr.steps
 
 
-async def _execute_skill_with_timeout(actual: str, topic: str, provider: str, model: str, params: dict, timeout: int = 240):
+async def _execute_skill_with_timeout(actual: str, topic: str, provider: str, model: str, params: dict, timeout: int = 600):
     """Execute a skill with a timeout to prevent hanging.
 
     Runs the blocking skill code in a thread pool so the async event loop
     is NOT blocked during long-running research tasks.
+
+    Returns:
+        Tuple of (content: str, steps: list). On timeout, both are populated
+        with an error message and empty steps (NOT a bare string, to avoid
+        unpacking bugs when callers do ``content, steps = await ...``).
     """
     loop = asyncio.get_event_loop()
     try:
@@ -70,7 +75,7 @@ async def _execute_skill_with_timeout(actual: str, topic: str, provider: str, mo
             timeout=timeout,
         )
     except asyncio.TimeoutError:
-        return f"技能执行超时（{timeout}秒）。请检查服务商配置和网络连接。"
+        return f"技能执行超时（{timeout}秒）。请检查服务商配置和网络连接。", []
 
 
 def _demo_content(topic: str, task_type: str) -> str:

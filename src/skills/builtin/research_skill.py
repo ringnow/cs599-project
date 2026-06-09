@@ -15,6 +15,7 @@ from src.skills.base import BaseSkill, SkillResult, SkillContext
 from src.models.manager import get_model_manager
 from src.agent.tools import web_search, semantic_scholar_search, extract_web_content, extract_paper_content
 from src.agent.state import SearchResult
+from src.agent.image_gen import generate_image, enhance_report_with_images, embed_images_in_markdown
 from src.api.cancel import is_cancelled
 
 
@@ -162,6 +163,27 @@ class ResearchSkill(BaseSkill):
             report = self._generate_report(llm, topic, sub_questions, valid_syntheses, sources_list)
             steps[-1]["status"] = "done"
 
+            # Step 4: Generate images for the report (post-processing)
+            generated_images = []
+            try:
+                steps.append({"step": len(steps) + 1, "action": "image_gen", "status": "running"})
+                generated_images = enhance_report_with_images(
+                    report, llm,
+                    max_images=2,  # Limit to 2 images per report
+                )
+                success_count = sum(1 for img in generated_images if img.get("success"))
+                if success_count > 0:
+                    # Inject image references into report markdown
+                    report = embed_images_in_markdown(report, generated_images)
+                    steps[-1]["status"] = "done"
+                    steps[-1]["result"] = f"Generated {success_count} images"
+                else:
+                    steps[-1]["status"] = "warning"
+                    steps[-1]["result"] = "No images generated"
+            except Exception as img_e:
+                steps[-1]["status"] = "warning"
+                steps[-1]["result"] = f"Image generation skipped: {img_e}"
+
             return SkillResult(
                 success=True,
                 content=report,
@@ -171,6 +193,7 @@ class ResearchSkill(BaseSkill):
                     "num_papers_read": len(all_evaluated),
                     "num_papers_cited": len(sources_list),
                     "depth": depth,
+                    "generated_images": generated_images,
                 },
                 steps=steps,
                 sources=sources_list,
@@ -503,6 +526,14 @@ Example: ["What is X and how did it originate?", "What are the main approaches t
                          syntheses: List[Dict], sources_list: List[Dict]) -> str:
         """Generate final research report with evaluated and verified references.
 
+        Follows research-writing-skill standards:
+        - IMRaD structure (Abstract→Introduction→Related Work→Methodology→
+          Experiments→Results and Discussion→Conclusion)
+        - Writing principles: no fabricated data, separate source types,
+          avoid vague terms
+        - Editorial principles: Claim-First headings, Problem-First,
+          Technical claims require citations
+
         Only academic papers (from Semantic Scholar) that passed LLM evaluation
         are included. CSDN、知乎等非学术网络内容不作为正式引用.
         References use proper academic format with authors, year, journal.
@@ -556,50 +587,85 @@ Example: ["What is X and how did it originate?", "What are the main approaches t
             ref_table_lines.append(f"[{i}] {s.get('title', 'Untitled')}")
         ref_table = "\n".join(ref_table_lines)
 
-        prompt = f"""你是一名学术研究员，请基于以下经过阅读和评估的真实学术文献撰写调研报告。
+        prompt = f"""You are an academic researcher writing a survey/review paper. Write the report in **English** following the standard IMRaD (Introduction, Methods, Results, and Discussion) structure.
 
-研究主题：{topic}
+## Research Topic
+{topic}
 
-===== 经过评估的真实学术文献（所有文献均已阅读全文/摘要并评估相关性） =====
+## Verified Academic References (all papers have been read and evaluated)
 {real_refs}
 
-===== 文献编号对照表 =====
+## Reference Number Lookup Table
 {ref_table}
 
-===== 各子问题研究摘要（摘要中已使用 [编号] 格式引用学术文献） =====
+## Sub-Question Research Syntheses (already contain [N] citations to the references above)
 {syntheses_text}
 
-写作要求：
-1. **必须在正文中引用具体学术文献**：在提到某个发现、方法或结论时，使用 [编号] 标注来源
-2. **只引用上方"文献编号对照表"中的文献**，这些都是经过阅读和评估的真实学术论文
-3. **禁止引用 CSDN、知乎、博客园、个人主页等非学术网络来源**——只引用学术论文
-4. 对每篇引用的论文，简要说明其核心贡献（如"Smith et al. [1] 提出了..."）
-5. 如果某个方面在现有文献中缺乏覆盖，如实说明"当前文献中未涵盖该方面"
-6. **不要在末尾写"参考文献"章节**——参考文献列表将在下方自动生成
-7. 正文至少 1200 字，确保覆盖所有子问题
-8. **网络搜索背景信息仅供参考，不作为正式引用**
+---
 
-请用 Markdown 格式撰写，包含以下章节：
+### Writing Principles (strictly follow these)
 
-# {topic}
+1. **NO fabricated data**: Do NOT invent any numerical results, DOI numbers, journal volumes/pages, or experimental outcomes that are not present in the provided materials.
+2. **Source-type labeling**: Clearly distinguish three categories of information:
+   - **Original/sourced** — facts, findings, or quotes directly from the provided academic papers
+   - **Inferred/synthesized** — reasonable conclusions drawn across multiple sources (label as "this suggests that...")
+   - **Suggested/extended** — speculative future directions or hypothetical applications (label as "one possible extension could be...")
+3. **NO vague promotional language**: Avoid terms like "significant", "state-of-the-art", "advanced", "effective", "promising", "novel", "groundbreaking" unless they are DIRECTLY supported by a cited source. Instead, use measurable or comparative phrasing (e.g., "achieved 94.2% accuracy on Dataset X [1]").
+4. **Every technical claim requires a citation**: Any statement about a method, algorithm, performance metric, or phenomenon MUST be followed by a [N] reference.
+5. **Cite only from the Reference Number Lookup Table above**: Do NOT cite any paper not in this list. Do NOT cite web pages (CSDN, Zhihu, blog posts, etc.).
+6. **When literature is insufficient**: If a particular aspect is not covered by the available references, clearly state "The reviewed literature does not provide sufficient evidence for..." rather than fabricating content.
+7. **First-person perspective**: Write as the reviewing author ("we find that...", "the reviewed studies indicate..."), not as the original authors of cited papers.
 
-## 执行摘要
+---
 
-## 引言
+### Section Structure and Rhetorical Guides
 
-## 核心发现
+Write the report with the following sections:
 
-## 分析
+#### 1. Abstract
+(~150 words) One paragraph covering: research problem → approach/method → key findings → main contribution.
 
-## 结论"""
+#### 2. Introduction
+Structure: background of the problem → unresolved challenge or gap → why this gap matters → what this review does → key contributions.
+- Every statement describing the problem domain must be supported by [N].
+- End with a clear statement of contributions.
+
+#### 3. Related Work
+Organize by technical theme or approach, not by paper. For each theme:
+- Compare and contrast assumptions, methodologies, and limitations across papers.
+- Use Claim-First headings (e.g., "Deep Learning Methods for Time-Series Forecasting" not "Related Work in Time-Series").
+
+#### 4. Methodology / Approach
+Describe the scope, inclusion criteria, and analytical framework of this review:
+- Search strategy and databases used
+- Inclusion/exclusion criteria for papers
+- Quality assessment method (papers evaluated by LLM for relevance)
+- Synthesis method
+
+#### 5. Results and Discussion
+Structure each finding as: **Claim first** → evidence from [N] sources → mechanism/explanation → limitations.
+- Use Claim-First subheadings (e.g., "Transformer-Based Models Outperform RNNs on Long-Sequence Tasks" not "Results for Transformer Models").
+- Discuss disagreements or contradictions between sources.
+- Explicitly note when a finding comes from a single source vs. multiple corroborating sources.
+
+#### 6. Conclusion
+- Summarize the answer to the research question
+- Recap the main evidence
+- Acknowledge limitations of this review
+- Suggest directions for future research
+
+---
+
+### Output Format
+Write in Markdown. Start with the title as H1. Use H2 for sections (## Abstract, ## Introduction, etc.) and H3 for subsections."""
 
         try:
             response = llm.invoke([{"role": "user", "content": prompt}])
             content = response.content if hasattr(response, 'content') else str(response)
             # Append REAL references (not LLM-generated fakes)
             if real_refs:
-                content += "\n\n## 参考文献\n" + real_refs
-            content += "\n\n---\n*本报告引用的文献均经过全文阅读和相关性评估。仅引用学术论文来源。文献检索由 [Semantic Scholar](https://www.semanticscholar.org/) 提供支持。*"
+                content += "\n\n## References\n" + real_refs
+            content += "\n\n---\n*This report cites only peer-reviewed academic papers that were fully read and evaluated for relevance. Literature search powered by [Semantic Scholar](https://www.semanticscholar.org/).*"
             return content
         except Exception as e:
             return f"# {topic}\n\n## Error\n{e}\n\n## Raw Findings\n\n{syntheses_text}"
