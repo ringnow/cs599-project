@@ -30,9 +30,8 @@ class SkillRegistry:
     def __init__(self):
         self._skills: Dict[str, BaseSkill] = {}
         self._skill_classes: Dict[str, Type[BaseSkill]] = {}
-        self._skill_sources: Dict[str, str] = {}  # name -> "builtin" | "user"
+        self._skill_sources: Dict[str, str] = {}
         self._load_builtin_skills()
-        self._discover_user_skills()
     
     def _load_builtin_skills(self):
         """Load all built-in skills."""
@@ -41,20 +40,20 @@ class SkillRegistry:
         from src.skills.builtin.survey_skill import SurveyWritingSkill
         from src.skills.builtin.code_review_skill import CodeReviewSkill
         from src.skills.builtin.literature_review_skill import LiteratureReviewSkill
-        
+        from src.skills.builtin.word_export_skill import WordExportSkill
+
         builtin = [
             ResearchSkill,
             PaperWritingSkill,
             SurveyWritingSkill,
             CodeReviewSkill,
             LiteratureReviewSkill,
+            WordExportSkill,
         ]
-        
+
         for skill_cls in builtin:
             self.register(skill_cls, source="builtin")
-    
-    def _discover_user_skills(self):
-        """Discover and load user-installed skills from skills_library/."""
+
         if not SKILLS_LIBRARY.exists():
             return
         

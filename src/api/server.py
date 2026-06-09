@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from src.api.routers import assistant, generation, agents, providers, skills, history, mcp, search
+from src.api.routers import assistant, generation, agents, providers, skills, history, mcp, search, export
 from src.api.cancel import mark_cancelled
 
 app = FastAPI(title="CS599 Research Assistant API", version="2.0.0")
@@ -65,6 +65,7 @@ app.include_router(providers.router, prefix="/api")
 app.include_router(skills.router, prefix="/api")
 app.include_router(history.router, prefix="/api")
 app.include_router(mcp.router, prefix="/api")
+app.include_router(export.router)
 app.include_router(search.router, prefix="/api")
 
 
