@@ -186,6 +186,7 @@ export default function App() {
 
   // Notification success alert
   const [toastMessage, setToastMessage] = useState<string>("");
+  const [exporting, setExporting] = useState<string>("");
 
   // Refs for auto scrolling log box
   const logBoxEndRef = useRef<HTMLDivElement>(null);
@@ -2169,14 +2170,12 @@ export default function App() {
                   </div>
                   {currentMarkdown && !isLoading && (
                     <div className="flex gap-3 mt-4">
-                      <button onClick={() => { const blob = new Blob([currentMarkdown], {type:'text/markdown'}); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `cs599_output_${Date.now()}.md`; a.click(); URL.revokeObjectURL(url); }} className="flex-1 py-3 rounded-full text-xs font-bold text-center text-white tracking-wide bg-slate-900 hover:bg-slate-800 transition-all shadow-md">
-                        ⬇️ 下载 .md
+                      
+                      <button onClick={() => handleExport("docx")} disabled={!!exporting} className={"flex-1 py-3 rounded-full text-xs font-bold text-center text-white tracking-wide transition-all shadow-md " + (exporting === "docx" ? "bg-indigo-400 cursor-wait" : "bg-indigo-600 hover:bg-indigo-700")}>
+                        {exporting === "docx" ? "⏳ 生成 Word..." : "📄 导出 Word"}
                       </button>
-                      <button onClick={() => handleExport("docx")} className="flex-1 py-3 rounded-full text-xs font-bold text-center text-white tracking-wide bg-indigo-600 hover:bg-indigo-700 transition-all shadow-md">
-                        📄 导出 Word
-                      </button>
-                      <button onClick={() => handleExport("pdf")} className="flex-1 py-3 rounded-full text-xs font-bold text-center text-white tracking-wide bg-emerald-600 hover:bg-emerald-700 transition-all shadow-md">
-                        📕 导出 PDF
+                      <button onClick={() => handleExport("pdf")} disabled={!!exporting} className={"flex-1 py-3 rounded-full text-xs font-bold text-center text-white tracking-wide transition-all shadow-md " + (exporting === "pdf" ? "bg-emerald-400 cursor-wait" : "bg-emerald-600 hover:bg-emerald-700")}>
+                        {exporting === "pdf" ? "⏳ 生成 PDF..." : "📕 导出 PDF"}
                       </button>
                     </div>
                   )}

@@ -30,34 +30,68 @@ def _render_docx(markdown_text: str, title: str, author: str, language: str) -> 
     style = doc.styles['Normal']
     font = style.font
     font.name = 'Times New Roman'
-    font.size = Pt(12)
+    font.size = Pt(11)
     pf = style.paragraph_format
     pf.space_after = Pt(6)
-    pf.line_spacing = 1.5
+    pf.line_spacing = 1.15
     style.element.rPr.rFonts.set(qn('w:eastAsia'), '宋体')
 
+    # ── Helper: add a styled heading ──
+    def add_heading(text: str, level: int):
+        h = doc.add_heading(text, level=level)
+        for run in h.runs:
+            run.font.name = 'Times New Roman'
+        return h
+
     # ── Title page ──
-    for _ in range(4):
+    for _ in range(6):
         doc.add_paragraph('')
     tp = doc.add_paragraph()
     tp.alignment = WD_ALIGN_PARAGRAPH.CENTER
     r = tp.add_run(title or "Research Report")
     r.bold = True
-    r.font.size = Pt(22)
+    r.font.size = Pt(24)
     r.font.name = 'Times New Roman'
+    r.font.color.rgb = RGBColor(30, 30, 80)
 
+    doc.add_paragraph('')
     if author:
         ap = doc.add_paragraph()
         ap.alignment = WD_ALIGN_PARAGRAPH.CENTER
         ar = ap.add_run(f"Author: {author}")
         ar.font.size = Pt(14)
         ar.font.name = 'Times New Roman'
+        ar.font.color.rgb = RGBColor(60, 60, 60)
 
+    doc.add_paragraph('')
     dp = doc.add_paragraph()
     dp.alignment = WD_ALIGN_PARAGRAPH.CENTER
     dr = dp.add_run(datetime.now().strftime("%B %d, %Y"))
     dr.font.size = Pt(12)
     dr.font.name = 'Times New Roman'
+    dr.font.color.rgb = RGBColor(100, 100, 100)
+
+    # Generate abstract (first 300 chars of content as summary)
+    plain = re.sub(r'[#*>|`\-\[\]]', '', markdown_text)[:300]
+    if plain:
+        doc.add_paragraph('')
+        ab = doc.add_paragraph()
+        ab.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        ab_lab = ab.add_run("Abstract")
+        ab_lab.bold = True
+        ab_lab.font.size = Pt(12)
+        ab_lab.font.name = 'Times New Roman'
+        doc.add_paragraph('')
+        ap = doc.add_paragraph()
+        ap.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        ap_r = ap.add_run(plain + "...")
+        ap_r.font.size = Pt(10)
+        ap_r.font.name = 'Times New Roman'
+        ap_r.font.color.rgb = RGBColor(80, 80, 80)
+
+    doc.add_page_break()
+
+    # ── Markdown parser (same as before, but uses structured headings) ──
     dr.font.color.rgb = RGBColor(100, 100, 100)
 
     doc.add_page_break()
