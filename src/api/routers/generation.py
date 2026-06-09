@@ -108,9 +108,9 @@ async def report(req: ReportRequest):
     logs = ["初始化学术报告生成器...", f"分析研究领域: {req.field or '通用'}", f"生成深度: {req.depth}"]
     try:
         depth_map = {"基础": 1, "详细": 3, "专家": 5}
-        provider, model = _provider_model(req.provider, req.model)
+        provider, model = resolve_provider_model(req.provider, req.model)
 
-        if not _has_api_key(provider):
+        if not has_api_key(provider):
             logs.append("未检测到 API Key，切换至演示模式")
             return ApiResponse(logs=logs, markdown=_demo_content(req.subject, "report"))
 

@@ -165,10 +165,23 @@ class Crew:
             writer.state.status = "done"
             self._log("complete", f"Write iteration {iteration + 1} complete", "writer")
             
-            # If critic says it's good enough, stop
-            if review_result and "Pass" in review_result.get("review", ""):
-                self._log("decision", "Review passed, stopping iterations", "crew")
-                break
+            # If critic says it's good enough via JSON, stop early
+            if review_result:
+                import json as _json, re as _re
+                review_text = review_result.get("review", "")
+                try:
+                    m = _re.search(r'\{.*\}', review_text, _re.DOTALL)
+                    if m:
+                        j = _json.loads(m.group())
+                        verdict = j.get("verdict", "").lower()
+                        if verdict == "pass":
+                            self._log("decision", "✅ Review passed via JSON verdict, stopping iterations", "crew")
+                            break
+                except Exception:
+                    pass
+                if "Pass" in review_text:
+                    self._log("decision", "Review passed, stopping iterations", "crew")
+                    break
         
         duration = int((time.time() - start_time) * 1000)
         
