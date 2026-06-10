@@ -19,6 +19,9 @@ import requests
 from src.agent.state import SearchResult
 from src.config import config
 from src.models.key_store import get_key_store
+from src.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 # ============================================================================
 # Rate limiter for Semantic Scholar API (1 req/s limit for free tier)
@@ -47,7 +50,7 @@ def _bocha_search(query: str, max_results: int = 5) -> List[SearchResult]:
     """Search using BoCha API (https://api.bocha.cn/v1/web-search)."""
     api_key = _get_search_api_key("bocha")
     if not api_key:
-        print("[BoCha] 未配置 API Key（请在服务商管理 → 搜索工具 API Key 中配置）")
+        logger.warning("[BoCha] 未配置 API Key（请在服务商管理 → 搜索工具 API Key 中配置）")
         return []
     try:
         url = "https://api.bocha.cn/v1/web-search"
@@ -60,7 +63,7 @@ def _bocha_search(query: str, max_results: int = 5) -> List[SearchResult]:
         resp.raise_for_status()
         data = resp.json()
         if data.get("code") != 200:
-            print(f"[BoCha] API error: {data}")
+            logger.warning("[BoCha] API error: %s", data)
             return []
         results = []
         for r in data.get("data", {}).get("webPages", {}).get("value", []):
@@ -72,7 +75,7 @@ def _bocha_search(query: str, max_results: int = 5) -> List[SearchResult]:
             ))
         return results
     except Exception as e:
-        print(f"[BoCha] Search failed: {e}")
+        logger.warning("[BoCha] Search failed: %s", e)
         return []
 
 
@@ -90,12 +93,12 @@ def web_search(query: str, max_results: int = 5) -> List[SearchResult]:
     try:
         results = _bocha_search(query, max_results)
         if results:
-            print(f"[search] BoCha returned {len(results)} results")
+            logger.info("[search] BoCha returned %d results", len(results))
             return results
     except Exception as e:
         msg = f"BoCha: {e}"
         errors.append(msg)
-        print(f"[search] {msg}")
+        logger.warning("[search] %s", msg)
 
     # 2. Try Brave Search (fallback, requires API key)
     brave_key = _get_search_api_key("brave")
@@ -103,20 +106,20 @@ def web_search(query: str, max_results: int = 5) -> List[SearchResult]:
         try:
             results = _brave_search(query, max_results, brave_key)
             if results:
-                print(f"[search] Brave returned {len(results)} results")
+                logger.info("[search] Brave returned %d results", len(results))
                 return results
         except Exception as e:
             msg = f"Brave: {e}"
             errors.append(msg)
-            print(f"[search] {msg}")
+            logger.warning("[search] %s", msg)
     else:
         errors.append("Brave: 未配置 API Key")
 
     # 3. All backends failed
-    print(f"[search] ⚠️ All web search backends failed for query: {query[:50]}...")
+    logger.warning("[search] ⚠️ All web search backends failed for query: %s...", query[:50])
     for err in errors:
-        print(f"  - {err}")
-    print("[search] 💡 提示: 在「服务商管理」→「搜索工具 API Key」中配置 BoCha API Key")
+        logger.warning("  - %s", err)
+    logger.info("[search] 💡 提示: 在「服务商管理」→「搜索工具 API Key」中配置 BoCha API Key")
     return []
 
 
@@ -147,7 +150,7 @@ def _brave_search(query: str, max_results: int = 5, api_key: str = "") -> List[S
             ))
         return results
     except Exception as e:
-        print(f"[Brave] Search failed: {e}")
+        logger.warning("[Brave] Search failed: %s", e)
         return []
 
 
@@ -175,7 +178,7 @@ def arxiv_search(query: str, max_results: int = 3) -> List[SearchResult]:
             ))
         return results
     except Exception as e:
-        print(f"[arXiv] Search failed: {e}")
+        logger.warning("[arXiv] Search failed: %s", e)
         return []
 
 
@@ -193,7 +196,7 @@ def semantic_scholar_search(query: str, max_results: int = 3) -> List[SearchResu
     """
     try:
         api_key = _get_search_api_key("semantic_scholar")
-        print(f"[SemanticScholar] API key {'✓ found' if api_key else '✗ NOT FOUND'}")
+        logger.debug("[SemanticScholar] API key %s", '✓ found' if api_key else '✗ NOT FOUND')
 
         # Rate limit: free tier allows max 1 req/s
         _rate_limit_semantic_scholar()
@@ -203,7 +206,7 @@ def semantic_scholar_search(query: str, max_results: int = 3) -> List[SearchResu
         if api_key:
             headers["x-api-key"] = api_key
         else:
-            print("[SemanticScholar] ⚠️ 未配置 API Key，使用免费接口（可能被限流 429）")
+            logger.warning("[SemanticScholar] ⚠️ 未配置 API Key，使用免费接口（可能被限流 429）")
         params = {
             "query": query,
             "limit": min(max_results, 10),
@@ -257,13 +260,13 @@ def semantic_scholar_search(query: str, max_results: int = 3) -> List[SearchResu
                 paper_id=p.get("paperId", ""),
             ))
         if results:
-            print(f"[SemanticScholar] returned {len(results)} results")
+            logger.info("[SemanticScholar] returned %d results", len(results))
             oa_count = sum(1 for r in results if r.is_open_access)
             if oa_count:
-                print(f"[SemanticScholar]   {oa_count} papers have open access PDFs")
+                logger.info("[SemanticScholar]   %d papers have open access PDFs", oa_count)
         return results
     except Exception as e:
-        print(f"[SemanticScholar] Search failed: {e}")
+        logger.warning("[SemanticScholar] Search failed: %s", e)
         return []
 
 
@@ -307,7 +310,7 @@ def extract_web_content(url: str) -> str:
         content = re.sub(r'\s+', ' ', content).strip()
         return content[:3000] if content else ""
     except Exception as e:
-        print(f"[extract] Content extraction failed for {url}: {e}")
+        logger.warning("[extract] Content extraction failed for %s: %s", url, e)
         return ""
 
 
@@ -329,7 +332,7 @@ def extract_paper_content(paper: SearchResult) -> str:
     # Priority 1: Download Open Access PDF
     if paper.pdf_url and paper.is_open_access:
         try:
-            print(f"  ⬇️ 正在下载 PDF: {paper.title[:50]}...")
+            logger.info("  ⬇️ 正在下载 PDF: %s...", paper.title[:50])
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
             }
@@ -358,14 +361,14 @@ def extract_paper_content(paper: SearchResult) -> str:
                         cut = max(last_period, last_newline)
                         if cut > 2000:
                             content = content[:cut+1]
-                    print(f"  ✅ PDF 提取完成: {len(content)} 字")
+                    logger.info("  ✅ PDF 提取完成: %d 字", len(content))
                     return content
             except ImportError:
-                print(f"  ⚠️ PyMuPDF 未安装，跳过 PDF 解析")
+                logger.warning("  ⚠️ PyMuPDF 未安装，跳过 PDF 解析")
             except Exception as pdf_err:
-                print(f"  ⚠️ PDF 解析失败: {pdf_err}")
+                logger.warning("  ⚠️ PDF 解析失败: %s", pdf_err)
         except Exception as dl_err:
-            print(f"  ⚠️ PDF 下载失败: {dl_err}")
+            logger.warning("  ⚠️ PDF 下载失败: %s", dl_err)
 
     # Priority 2: Call Semantic Scholar Paper API for full abstract
     if paper.paper_id:
@@ -393,10 +396,10 @@ def extract_paper_content(paper: SearchResult) -> str:
                 content = "\n\n".join(parts)
                 if len(content) > 3500:
                     content = content[:3500]
-                print(f"  ✅ Semantic Scholar API 返回 {len(content)} 字（含完整摘要）")
+                logger.info("  ✅ Semantic Scholar API 返回 %d 字（含完整摘要）", len(content))
                 return content
         except Exception as e:
-            print(f"  ⚠️ S2 API 获取详情失败: {str(e)[:60]}")
+            logger.warning("  ⚠️ S2 API 获取详情失败: %s", str(e)[:60])
 
     # Priority 3: Use already available data (abstract + tldr)
     parts = []
@@ -409,7 +412,7 @@ def extract_paper_content(paper: SearchResult) -> str:
         parts.append(f"[Abstract] {full_abstract}")
     if parts:
         total = sum(len(p) for p in parts)
-        print(f"  ℹ️ 使用已有摘要/TLDR ({total} 字)")
+        logger.info("  ℹ️ 使用已有摘要/TLDR (%d 字)", total)
         return "\n\n".join(parts)
 
     return ""

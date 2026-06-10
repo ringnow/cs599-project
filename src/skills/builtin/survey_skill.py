@@ -7,7 +7,8 @@ from typing import Dict, List
 
 from src.skills.base import BaseSkill, SkillResult, SkillContext
 from src.models.manager import get_model_manager
-from src.agent.tools import web_search, semantic_scholar_search
+from src.agent.tools import web_search, semantic_scholar_search, extract_paper_content
+from src.agent.state import SearchResult
 
 
 class SurveyWritingSkill(BaseSkill):
@@ -58,30 +59,57 @@ class SurveyWritingSkill(BaseSkill):
         )
         
         steps = []
-        
+        evaluated_papers = []
+        worth_citing_papers = []
+
         # Step 1: Gather sources
         steps.append({"step": 1, "action": "gather_sources", "status": "running"})
-        sources = self._gather_sources(topic)
+        sources, ss_results = self._gather_sources(topic)
         steps[-1]["status"] = "done"
         steps[-1]["result"] = f"Found {len(sources)} sources"
-        
-        # Step 2: Build taxonomy
+
+        # Step 1b: Evaluate academic papers using ResearchSkill's pipeline
+        if ss_results:
+            steps.append({"step": 2, "action": "evaluate_papers", "status": "running"})
+            try:
+                from src.skills.builtin.research_skill import ResearchSkill
+                rs = ResearchSkill()
+                for r in ss_results:
+                    content = extract_paper_content(r)
+                    r.content = content or (r.snippet[:2000] if r.snippet else "")
+                academic_papers = [r for r in ss_results if r.content]
+                if academic_papers:
+                    evaluated_papers = rs._evaluate_papers(llm, academic_papers, topic, context.custom_params.get("request_id", ""))
+                    worth_citing_papers = [ev for ev in evaluated_papers if ev.get("worth_citing")]
+                    steps[-1]["status"] = "done"
+                    steps[-1]["result"] = f"Evaluated {len(evaluated_papers)} papers, {len(worth_citing_papers)} worth citing"
+                else:
+                    steps[-1]["status"] = "warning"
+                    steps[-1]["result"] = "No academic papers with content to evaluate"
+            except Exception as eval_e:
+                steps[-1]["status"] = "warning"
+                steps[-1]["result"] = f"Paper evaluation skipped: {eval_e}"
+        # Step 3: Build taxonomy (was step 2)
+        next_step = 3
         taxonomy = None
         if include_taxonomy:
-            steps.append({"step": 2, "action": "build_taxonomy", "status": "running"})
+            steps.append({"step": next_step, "action": "build_taxonomy", "status": "running"})
             taxonomy = self._build_taxonomy(llm, topic, sources)
             steps[-1]["status"] = "done"
-        
-        # Step 3: Comparative analysis
+            next_step += 1
+
+        # Step 4: Comparative analysis (was step 3)
         comparisons = None
         if include_comparisons:
-            steps.append({"step": 3, "action": "comparative_analysis", "status": "running"})
+            steps.append({"step": next_step, "action": "comparative_analysis", "status": "running"})
             comparisons = self._comparative_analysis(llm, topic, sources)
             steps[-1]["status"] = "done"
-        
-        # Step 4: Write survey
-        steps.append({"step": 4, "action": "write_survey", "status": "running"})
-        survey = self._write_survey(llm, topic, sources, taxonomy, comparisons, scope)
+            next_step += 1
+
+        # Step 5: Write survey (was step 4)
+        steps.append({"step": next_step, "action": "write_survey", "status": "running"})
+        survey = self._write_survey(llm, topic, sources, taxonomy, comparisons, scope, evaluated_papers, worth_citing_papers)
+        steps[-1]["status"] = "done"
         steps[-1]["status"] = "done"
         
         return SkillResult(
@@ -97,14 +125,22 @@ class SurveyWritingSkill(BaseSkill):
             sources=sources,
         )
     
-    def _gather_sources(self, topic: str) -> List[Dict]:
-        """Gather sources for the survey."""
+    def _gather_sources(self, topic: str) -> tuple:
+        """Gather sources for the survey.
+
+        Returns:
+            (sources_dicts, ss_orig) — dicts for prompt building,
+            original SearchResult objects for LLM evaluation.
+        """
+        ss_results = semantic_scholar_search(topic, max_results=8)
+        web_results = web_search(f"{topic} survey review", max_results=5)
+
         sources = []
-        for r in semantic_scholar_search(topic, max_results=8):
+        for r in ss_results:
             sources.append({"title": r.title, "url": r.url, "type": "semantic_scholar", "snippet": r.snippet})
-        for r in web_search(f"{topic} survey review", max_results=5):
+        for r in web_results:
             sources.append({"title": r.title, "url": r.url, "type": "web", "snippet": r.snippet})
-        return sources
+        return sources, ss_results
     
     def _build_taxonomy(self, llm, topic: str, sources: List[Dict]) -> str:
         """Build a taxonomy/classification of the field."""
@@ -150,26 +186,61 @@ Use Markdown table format. Output only the tables."""
             return f"<!-- Error: {e} -->"
     
     def _write_survey(self, llm, topic: str, sources: List[Dict], 
-                      taxonomy: str, comparisons: str, scope: str) -> str:
+                      taxonomy: str, comparisons: str, scope: str,
+                      evaluated_papers: List[Dict] = None,
+                      worth_citing_papers: List[Dict] = None) -> str:
         """Write the complete survey document."""
-        sources_text_lines = []
-        for s in sources[:15]:
-            sources_text_lines.append(f"- [{s['title']}]({s['url']}) ({s['type']})")
-        sources_text = "\n".join(sources_text_lines)
-        
+        # Build sources text from evaluated papers if available
+        if evaluated_papers:
+            sources_text_lines = []
+            for idx, ev in enumerate(evaluated_papers, 1):
+                icon = "📄" if ev.get("worth_citing") else "📋"
+                sources_text_lines.append(f"{icon} [{idx}] {ev['title']} — {ev.get('relevance', '?')}")
+            sources_text = "\n".join(sources_text_lines[:15])
+
+            # Add full verified references section
+            if worth_citing_papers:
+                ref_lines = []
+                for idx, ev in enumerate(worth_citing_papers, 1):
+                    authors = ev.get("authors", [])
+                    authors_str = ", ".join(authors[:3]) if authors else ""
+                    ref = f"[{idx}] {ev['title']}"
+                    if authors_str:
+                        ref += f". {authors_str}"
+                    if ev.get("year"):
+                        ref += f" ({ev['year']})"
+                    if ev.get("journal"):
+                        ref += f". {ev['journal']}"
+                    ref_lines.append(ref)
+                refs_text = "\n\nVerified References:\n" + "\n".join(ref_lines)
+            else:
+                refs_text = ""
+        else:
+            sources_text_lines = []
+            for s in sources[:15]:
+                sources_text_lines.append(f"- [{s['title']}]({s['url']}) ({s['type']})")
+            sources_text = "\n".join(sources_text_lines)
+            refs_text = ""
+
         taxonomy_section = "Taxonomy:\n" + taxonomy if taxonomy else ""
         comparisons_section = "Comparisons:\n" + comparisons if comparisons else ""
-        
+
         prompt = f"""Write a comprehensive survey document on: {topic}
 
 Scope: {scope}
 
-Sources to reference:
+Sources to reference (cite using [N] format):
 {sources_text}
 
 {taxonomy_section}
 
 {comparisons_section}
+{refs_text}
+
+Requirements:
+- ONLY cite sources from the list above
+- Do NOT fabricate references
+- Use [N] citation format matching the numbered sources above
 
 Generate a survey document with:
 
@@ -199,10 +270,31 @@ Open problems and emerging trends
 ## 7. Conclusion
 
 ## References
-Key papers cited"""
-        
+Cite the sources listed above using [N] format"""
+
         try:
             response = llm.invoke([{"role": "user", "content": prompt}])
-            return response.content if hasattr(response, 'content') else str(response)
+            content = response.content if hasattr(response, 'content') else str(response)
+            # Append real verified references
+            if worth_citing_papers:
+                real_refs = "\n\n## Verified References (Real Academic Papers)\n\n"
+                for idx, ev in enumerate(worth_citing_papers, 1):
+                    authors = ev.get("authors", [])
+                    authors_str = ", ".join(authors[:3]) if authors else ""
+                    ref = f"[{idx}] {ev['title']}"
+                    if authors_str:
+                        ref += f". {authors_str}"
+                    if ev.get("year"):
+                        ref += f" ({ev['year']})"
+                    if ev.get("journal"):
+                        ref += f". {ev['journal']}"
+                    if ev.get("url"):
+                        ref += f". {ev['url']}"
+                    if ev.get("key_findings"):
+                        ref += f" — {ev['key_findings'][:100]}"
+                    real_refs += ref + "\n\n"
+                real_refs += "\n*These references are real academic papers that were read and evaluated by LLM.*\n"
+                content += real_refs
+            return content
         except Exception as e:
             return f"# Survey: {topic}\n\n## Error\n{e}"

@@ -82,6 +82,8 @@ def _demo_content(topic: str, task_type: str) -> str:
     """Return demo content when no API key is configured."""
     return f"""### 演示模式 — 未配置 API Key
 
+> **⚠️ 警告：演示模式** — 以下内容由 AI 自动生成，其中的参考文献为模拟示例，**并非真实学术论文**。请勿将其用于实际学术引用或研究用途。如需真实引用，请在「服务商管理」中配置有效的 API Key。
+
 当前正在处理主题：**{topic}**
 
 ---
@@ -96,10 +98,10 @@ def _demo_content(topic: str, task_type: str) -> str:
 - **博弈演化模块 (Evolutionary Game Module)**: 通过模拟自适应网络转移函数，实现分布式智能体间的局部纳什对齐
 - **可解释性自回归模型 (Explainable Auto-regressive Logic)**: 增加可解释注意力张量的权重分布，帮助追踪决策归因
 
-#### 3. 领域经典参考文献
+#### 3. 领域经典参考文献（⚠️ 以下为演示示例，非真实数据）
 
-1. **Zhang, Y., & Wang, H. (2025).** "Scalable Deep Autoencoders for Multi-agent Coordination and Federated Topologies." *Journal of Machine Learning Research (JMLR)*, vol. 26, pp. 112-134.
-2. **Li, S., et al. (2025).** "Decentralized Optimal Control with Deep Implicit Layers." *IEEE Transactions on Pattern Analysis and Machine Intelligence (TPAMI)*, vol. 47, no. 3, pp. 1024-1039.
+1. **[演示示例] Zhang, Y., & Wang, H. (2025).** "Scalable Deep Autoencoders for Multi-agent Coordination and Federated Topologies." *Journal of Machine Learning Research (JMLR)*, vol. 26, pp. 112-134.
+2. **[演示示例] Li, S., et al. (2025).** "Decentralized Optimal Control with Deep Implicit Layers." *IEEE Transactions on Pattern Analysis and Machine Intelligence (TPAMI)*, vol. 47, no. 3, pp. 1024-1039.
 
 ---
 

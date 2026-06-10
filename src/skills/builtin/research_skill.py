@@ -17,6 +17,9 @@ from src.agent.tools import web_search, semantic_scholar_search, extract_web_con
 from src.agent.state import SearchResult
 from src.agent.image_gen import generate_image, enhance_report_with_images, embed_images_in_markdown
 from src.api.cancel import is_cancelled
+from src.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class ResearchSkill(BaseSkill):
@@ -78,6 +81,7 @@ class ResearchSkill(BaseSkill):
 
             syntheses = []
             all_evaluated = []  # Collect evaluated papers from all threads
+            sub_q_papers = {}  # sub_q_idx → [(local_ref_num, title)]
             with ThreadPoolExecutor(max_workers=min(len(sub_questions), 3)) as executor:
                 future_map = {}
                 for i, question in enumerate(sub_questions):
@@ -95,6 +99,8 @@ class ResearchSkill(BaseSkill):
                         q, sr, summary, ev_papers = future.result()
                         all_results.extend(sr)
                         all_evaluated.extend(ev_papers)
+                        # Track paper ref mapping per sub-question for global renumbering
+                        sub_q_papers[i] = [(ev.get("ref_num", idx+1), ev.get("title", "")) for idx, ev in enumerate(ev_papers)]
                         if summary:
                             syntheses.append({"question": q, "summary": summary})
                             step_info["status"] = "done"
@@ -126,9 +132,15 @@ class ResearchSkill(BaseSkill):
                 valid_syntheses = syntheses[:1]
 
             # Build sources list ONLY from evaluated academic papers (not web content)
+            # Deduplicate by title to avoid [N] collisions
             worth_citing = [ev for ev in all_evaluated if ev.get("worth_citing")]
             sources_list = []
+            seen_titles = set()
             for ev in worth_citing:
+                title = ev.get("title", "")
+                if not title or title in seen_titles:
+                    continue
+                seen_titles.add(title)
                 entry = {
                     "title": ev["title"],
                     "url": ev.get("url", ""),
@@ -145,7 +157,12 @@ class ResearchSkill(BaseSkill):
 
             # If no academic papers passed evaluation, include them all as last resort
             if not sources_list:
+                seen_titles = set()
                 for ev in all_evaluated:
+                    title = ev.get("title", "")
+                    if not title or title in seen_titles:
+                        continue
+                    seen_titles.add(title)
                     sources_list.append({
                         "title": ev["title"],
                         "url": ev.get("url", ""),
@@ -158,6 +175,26 @@ class ResearchSkill(BaseSkill):
                         "relevance": ev.get("relevance", "低"),
                         "worth_citing": False,
                     })
+
+            # ---- Global reference renumbering ----
+            # _synthesize uses local [N] per sub-question, but _generate_report
+            # assigns global numbers. Remap to keep citations consistent.
+            ref_mapping = {}
+            for global_idx, s in enumerate(sources_list, 1):
+                stitle = s.get("title", "")
+                for sq_idx, papers in sub_q_papers.items():
+                    for local_num, paper_title in papers:
+                        if paper_title == stitle:
+                            ref_mapping[(sq_idx, local_num)] = global_idx
+
+            for syn in valid_syntheses:
+                sq_idx = next((i for i, q in enumerate(sub_questions) if q == syn["question"]), None)
+                if sq_idx is not None:
+                    def _replace_ref(m, _sq=sq_idx):
+                        local_num = int(m.group(1))
+                        global_num = ref_mapping.get((_sq, local_num))
+                        return f"[{global_num}]" if global_num else m.group(0)
+                    syn["summary"] = re.sub(r'\[(\d+)\]', _replace_ref, syn["summary"])
 
             steps.append({"step": len(steps) + 1, "action": "report", "status": "running"})
             report = self._generate_report(llm, topic, sub_questions, valid_syntheses, sources_list)
@@ -228,7 +265,7 @@ class ResearchSkill(BaseSkill):
             web_results = web_search(question, max_results=3 + depth)
             search_results.extend(web_results)
             if web_results:
-                print(f"  → 网络来源: {len(web_results)} 条（仅做背景参考）")
+                logger.info("  → 网络来源: %d 条（仅做背景参考）", len(web_results))
 
         # ---- Academic search via Semantic Scholar ----
         if "semantic_scholar" in sources:
@@ -245,25 +282,25 @@ class ResearchSkill(BaseSkill):
                     translated = tr.content if hasattr(tr, 'content') else str(tr)
                     if translated and len(translated) < 300:
                         en_query = translated.strip()
-                        print(f"  → 关键词: '{en_query[:80]}...'")
+                        logger.info("  → 关键词: '%s...'", en_query[:80])
                 except Exception:
                     pass
 
             results = semantic_scholar_search(en_query, max_results=4)
             search_results.extend(results)
             if results:
-                print(f"  → 学术来源: Semantic Scholar ({len(results)} 篇论文)")
+                logger.info("  → 学术来源: Semantic Scholar (%d 篇论文)", len(results))
 
         # ---- Read paper content (download PDF or API fetch) ----
         for r in search_results:
             if r.source == "semantic_scholar":
-                print(f"  📖 正在阅读论文: {r.title[:60]}...")
+                logger.info("  📖 正在阅读论文: %s...", r.title[:60])
                 content = extract_paper_content(r)
                 if content:
                     r.content = content
-                    print(f"     ✓ 获取到 {len(content)} 字内容")
+                    logger.info("     ✓ 获取到 %d 字内容", len(content))
                 else:
-                    print(f"     ⚠️ 未能获取论文内容")
+                    logger.warning("     ⚠️ 未能获取论文内容")
                     r.content = r.snippet[:2000] if r.snippet else ""
 
         # ---- Evaluate academic papers with LLM ----
@@ -277,12 +314,12 @@ class ResearchSkill(BaseSkill):
                     model=model_id, api_key=api_key, base_url=base_url,
                     temperature=0.3, timeout=60, max_retries=0,
                 )
-                paper_evaluations = self._evaluate_papers(eval_llm, academic_papers, question)
+                paper_evaluations = self._evaluate_papers(eval_llm, academic_papers, question, request_id)
                 for ev in paper_evaluations:
                     icon = "✅" if ev.get("worth_citing") else "❌"
-                    print(f"  📊 论文评估 [{ev.get('ref_num','?')}]: {ev.get('title','')[:40]}... → {ev.get('relevance','?')} {icon}")
+                    logger.info("  📊 论文评估 [%s]: %s... → %s %s", ev.get('ref_num','?'), ev.get('title','')[:40], ev.get('relevance','?'), icon)
             except Exception as e:
-                print(f"  ⚠️ 论文评估失败: {e}")
+                logger.warning("  ⚠️ 论文评估失败: %s", e)
 
         # ---- Build synthesis input ----
         # Web content: used as background context, NOT as formal references
@@ -378,7 +415,7 @@ Example: ["What is X and how did it originate?", "What are the main approaches t
             f"What are the current challenges and future directions for {topic}?"
         ]
 
-    def _evaluate_papers(self, llm, papers: List[SearchResult], topic: str) -> List[Dict]:
+    def _evaluate_papers(self, llm, papers: List[SearchResult], topic: str, request_id: str = "") -> List[Dict]:
         """Evaluate each paper's relevance and extract key findings.
 
         For each paper, the LLM reads the full content and determines:
@@ -391,6 +428,7 @@ Example: ["What is X and how did it originate?", "What are the main approaches t
             llm: ChatOpenAI instance
             papers: List of SearchResult with .content populated
             topic: Research sub-question
+            request_id: Optional request ID for cancellation checks
 
         Returns:
             List of evaluation dicts with keys: ref_num, title, key_findings,
@@ -398,6 +436,9 @@ Example: ["What is X and how did it originate?", "What are the main approaches t
         """
         evaluations = []
         for idx, paper in enumerate(papers, 1):
+            # Check cancellation before each paper evaluation
+            if request_id and is_cancelled(request_id):
+                break
             if not paper.content:
                 evaluations.append({
                     "ref_num": idx,
@@ -442,13 +483,52 @@ Example: ["What is X and how did it originate?", "What are the main approaches t
             try:
                 response = llm.invoke([{"role": "user", "content": prompt}])
                 raw = response.content if hasattr(response, 'content') else str(response)
-                # Extract JSON from response
-                import re as _re
-                m = _re.search(r'\{.*\}', raw, _re.DOTALL)
-                if m:
-                    result = json.loads(m.group())
+                # Parse JSON with robust fallback chain:
+                # 1) Attempt direct json.loads on raw
+                # 2) Strip markdown code fences (```json ... ```)
+                # 3) Regex look for { ... }
+                result = None
+                parse_errors = []
+
+                # Strategy 1: direct parse
+                try:
+                    result = json.loads(raw)
+                except json.JSONDecodeError:
+                    parse_errors.append("direct parse failed")
+
+                # Strategy 2: strip markdown code fences
+                if result is None:
+                    import re as _re
+                    cleaned = _re.sub(r'^```(?:json)?\s*\n?', '', raw.strip(), flags=_re.MULTILINE)
+                    cleaned = _re.sub(r'\n?```\s*$', '', cleaned, flags=_re.MULTILINE)
+                    try:
+                        result = json.loads(cleaned)
+                    except json.JSONDecodeError:
+                        parse_errors.append("fence-strip parse failed")
+
+                # Strategy 3: regex extract first { ... } object
+                if result is None:
+                    import re as _re
+                    text_to_search = cleaned if 'cleaned' in locals() else raw
+                    m = _re.search(r'\{[^{}]*\}', text_to_search, _re.DOTALL)
+                    if m:
+                        try:
+                            result = json.loads(m.group())
+                        except json.JSONDecodeError:
+                            parse_errors.append("regex parse failed")
+
+                # Validate schema: worth_citing must be bool, relevance must be 高/中/低
+                if result is not None:
+                    if not isinstance(result.get("worth_citing"), bool):
+                        result["worth_citing"] = str(result.get("worth_citing", "")).lower() in ("true", "yes", "1", "是")
+                    if result.get("relevance") not in ("高", "中", "低"):
+                        result["relevance"] = "低"
+                    # Ensure required keys exist
+                    for key in ("key_findings", "reason", "usable_quotes"):
+                        if key not in result:
+                            result[key] = ""
                 else:
-                    result = {"key_findings": raw[:200], "relevance": "低", "worth_citing": False, "reason": "解析失败", "usable_quotes": ""}
+                    result = {"key_findings": raw[:200], "relevance": "低", "worth_citing": False, "reason": f"JSON解析失败: {'; '.join(parse_errors)}", "usable_quotes": ""}
 
                 result["ref_num"] = idx
                 result["title"] = paper.title
@@ -458,7 +538,7 @@ Example: ["What is X and how did it originate?", "What are the main approaches t
                 result["url"] = paper.url
                 result["_paper"] = paper
                 evaluations.append(result)
-                print(f"  📋 论文 #{idx} 评估完成: {result.get('relevance','?')} {'✅' if result.get('worth_citing') else '❌'}")
+                logger.info("  📋 论文 #%d 评估完成: %s %s", idx, result.get('relevance','?'), '✅' if result.get('worth_citing') else '❌')
             except Exception as e:
                 evaluations.append({
                     "ref_num": idx,

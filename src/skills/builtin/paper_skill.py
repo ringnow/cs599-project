@@ -15,7 +15,8 @@ from typing import Dict, List, Any
 
 from src.skills.base import BaseSkill, SkillResult, SkillContext
 from src.models.manager import get_model_manager
-from src.agent.tools import web_search, semantic_scholar_search
+from src.agent.tools import web_search, semantic_scholar_search, extract_paper_content
+from src.agent.state import SearchResult
 
 
 class PaperWritingSkill(BaseSkill):
@@ -87,9 +88,45 @@ class PaperWritingSkill(BaseSkill):
             research_data = self._gather_research(topic, steps)
             steps[-1]["status"] = "done"
 
-            # Step 2: Generate each section
+            # Step 2: Evaluate academic papers using ResearchSkill's evaluation pipeline
+            # (composition mode — reuse research_skill's LLM evaluation instead of LLM-fabricated refs)
+            evaluated_papers = []
+            worth_citing_papers = []
+            ss_orig = research_data.get("_ss_orig", [])
+            if ss_orig:
+                steps.append({"step": 2, "action": "evaluate_papers", "status": "running"})
+                try:
+                    from src.skills.builtin.research_skill import ResearchSkill
+                    rs = ResearchSkill()
+                    # Download paper content for SS results
+                    for r in ss_orig:
+                        content = extract_paper_content(r)
+                        r.content = content or (r.snippet[:2000] if r.snippet else "")
+                    academic_papers = [r for r in ss_orig if r.content]
+                    if academic_papers:
+                        evaluated_papers = rs._evaluate_papers(llm, academic_papers, topic, context.custom_params.get("request_id", ""))
+                        worth_citing_papers = [ev for ev in evaluated_papers if ev.get("worth_citing")]
+                        steps[-1]["status"] = "done"
+                        steps[-1]["result"] = f"Evaluated {len(evaluated_papers)} papers, {len(worth_citing_papers)} worth citing"
+                    else:
+                        steps[-1]["status"] = "warning"
+                        steps[-1]["result"] = "No academic papers with content to evaluate"
+                except Exception as eval_e:
+                    steps[-1]["status"] = "warning"
+                    steps[-1]["result"] = f"Paper evaluation skipped: {eval_e}"
+
+            # Step 3: Generate each section
             paper_sections = {}
             section_prompts = self._get_section_prompts(style, paper_type, length)
+
+            # Build evaluated sources string for prompts (numbered references)
+            if evaluated_papers:
+                sources_lines = []
+                for idx, ev in enumerate(evaluated_papers, 1):
+                    sources_lines.append(f"[{idx}] {ev['title']} — {'✅' if ev.get('worth_citing') else '❌'} {ev.get('relevance', '?')}")
+                sources_str = "\n".join(sources_lines)
+            else:
+                sources_str = "\n".join(f"- {s.get('title', '')}" for s in research_data.get("sources", [])[:15])
 
             for i, section in enumerate(sections, 3):
                 steps.append({"step": i, "action": f"write_{section}", "status": "running"})
@@ -98,9 +135,7 @@ class PaperWritingSkill(BaseSkill):
                     prompt = section_prompts[section]
                     prompt = prompt.replace("TOPIC_PLACEHOLDER", topic)
                     prompt = prompt.replace("SNIPPETS_PLACEHOLDER", research_data.get("snippets", "")[:3000])
-                    prompt = prompt.replace("SOURCES_PLACEHOLDER", "\n".join(
-                        f"- {s.get('title', '')}" for s in research_data.get("sources", [])[:15]
-                    ))
+                    prompt = prompt.replace("SOURCES_PLACEHOLDER", sources_str)
                     try:
                         response = llm.invoke([{"role": "user", "content": prompt}])
                         content = response.content if hasattr(response, 'content') else str(response)
@@ -115,6 +150,26 @@ class PaperWritingSkill(BaseSkill):
             # Step 3: Assemble final paper
             steps.append({"step": len(steps) + 1, "action": "assemble", "status": "running"})
             paper = self._assemble_paper(topic, paper_sections, sections, style)
+
+            # Append real references from evaluated papers (replace LLM-fabricated ones)
+            if worth_citing_papers:
+                real_refs = "\n\n## References (Verified)\n\n"
+                for idx, ev in enumerate(worth_citing_papers, 1):
+                    authors = ev.get("authors", [])
+                    authors_str = ", ".join(authors[:3]) if authors else ""
+                    ref = f"[{idx}] {ev['title']}"
+                    if authors_str:
+                        ref += f". {authors_str}"
+                    if ev.get("year"):
+                        ref += f" ({ev['year']})"
+                    if ev.get("journal"):
+                        ref += f". {ev['journal']}"
+                    if ev.get("url"):
+                        ref += f". {ev['url']}"
+                    real_refs += ref + "\n\n"
+                paper += "\n\n" + real_refs
+                paper += "\n*References are real academic papers evaluated by LLM. See also the \"References\" section above.*\n"
+
             steps[-1]["status"] = "done"
 
         except Exception as e:
@@ -137,15 +192,15 @@ class PaperWritingSkill(BaseSkill):
     
     def _gather_research(self, topic: str, steps: list) -> Dict:
         """Gather research material for the paper."""
-        sources = []
-        
-        # Web search
+        # Keep original SearchResult objects for LLM evaluation
         web_results = web_search(topic, max_results=5)
-        sources.extend([{"title": r.title, "url": r.url, "type": "web"} for r in web_results])
-        
-        # Semantic Scholar 学术搜索
         ss_results = semantic_scholar_search(topic, max_results=5)
-        sources.extend([{"title": r.title, "url": r.url, "type": "semantic_scholar"} for r in ss_results])
+        
+        sources = []
+        for r in web_results:
+            sources.append({"title": r.title, "url": r.url, "type": "web"})
+        for r in ss_results:
+            sources.append({"title": r.title, "url": r.url, "type": "semantic_scholar"})
         
         snippets = [r.snippet for r in web_results + ss_results if r.snippet]
         
@@ -155,6 +210,8 @@ class PaperWritingSkill(BaseSkill):
             "ss_results": [r.__dict__ for r in ss_results],
             "sources": sources,
             "snippets": "\n".join(snippets[:10]),
+            "_web_orig": web_results,
+            "_ss_orig": ss_results,
         }
     
     def _get_section_prompts(self, style: str, paper_type: str, length: str) -> Dict[str, str]:
@@ -268,17 +325,17 @@ Requirements:
 
 Output only the conclusion text.""",
 
-            "references": f"""Generate a References section with 8-12 realistic academic references for a paper on: TOPIC_PLACEHOLDER
+            "references": f"""Generate a References section in {style_upper} citation format using ONLY the verified sources listed below.
 
-Available sources:
+Available verified sources:
 SOURCES_PLACEHOLDER
 
 Requirements:
-- Mix of foundational and recent works (2020-2025)
-- Include journal papers, conference papers, and surveys
+- Cite ONLY from the available verified sources above
 - Use {style_upper} citation format
-- Include arXiv preprints where appropriate
-- References should look realistic and relevant
+- Do NOT invent or fabricate any references
+- If sources are insufficient, state that clearly
+- Include journal/conference information where available
 
 Output only the references in proper format.""",
         }
