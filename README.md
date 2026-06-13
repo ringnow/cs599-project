@@ -4,6 +4,8 @@
 
 Agentic AI 研究助手，支持多模型切换、多智能体协作和插件化技能系统，可生成调研报告、辅助论文构思、撰写学术论文。
 
+方向一：Agentic AI 原生开发
+
 ## v2 新特性
 
 | 特性 | v1 | v2 |
@@ -27,7 +29,8 @@ Agentic AI 研究助手，支持多模型切换、多智能体协作和插件化
 | 协议 | MCP (Model Context Protocol) |
 | UI | React + Vite (原 Streamlit 已替换) |
 | 学术搜索 | Semantic Scholar API + BoCha/Brave |
- | 容器 | Docker + Docker Compose |
+| 容器 | Docker + Docker Compose |
+| AI IDE | claude code、kimi agent |
 
 ## 致谢
 
