@@ -6,7 +6,7 @@ Agentic AI 研究助手，支持多模型切换、多智能体协作和插件化
 
 方向一：Agentic AI 原生开发
 
-![Demo 演示视频](vedio/output.mp4)
+[📹 点击观看 Demo 演示视频](https://github.com/ringnow/cs599-project/blob/main/vedio/output.mp4)
 
 ## v2 新特性
 
