@@ -1,58 +1,90 @@
-version: '3.8'
-
 services:
-  # ── Backend: FastAPI ────────────────────────────────────
-  research-agent:
+  api:
     build:
       context: .
-      dockerfile: Dockerfile
-    container_name: cs599-research-agent
+      args:
+        - HTTP_PROXY=
+        - HTTPS_PROXY=
+        - http_proxy=
+        - https_proxy=
     ports:
-      - "8000:8000"   # FastAPI
-    env_file:
-      - .env
+      - "8000:8000"
     environment:
-      - PYTHONPATH=/app
-    volumes:
-      - ./skills_library:/app/skills_library
-      - ~/.cs599-agent:/root/.cs599-agent
-      - ./research_outputs:/app/research_outputs
-    restart: unless-stopped
-    networks:
-      - agent-network
-
-  # ── Frontend: React + Vite dev server ─────────────────────────────────
-  frontend:
-    image: node:22-alpine
-    container_name: cs599-frontend
-    working_dir: /app
-    ports:
-      - "5173:5173"
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules  # anonymous volume to avoid overwriting
-    command: sh -c "npm install && npx vite --host 0.0.0.0 --port 5173"
+      # 使用 MySQL 作为主数据库
+      - DATABASE_URL=mysql+pymysql://cs599:cs599pass@mysql:3306/cs599?charset=utf8mb4
+      - REDIS_URL=redis://redis:6379/0
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-cs599-docker-jwt-key-change-this-in-real-deploy-2026}
+      - DEFAULT_ADMIN_PASSWORD=${DEFAULT_ADMIN_PASSWORD:-}
+      - BCRYPT_ROUNDS=${BCRYPT_ROUNDS:-10}
+      # RAG: ChromaDB 持久化路径 + Embedding 模型
+      - CHROMA_PATH=/app/.chroma
+      - EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+      # API Keys 持久化路径（挂载为 Docker 卷，容器重启不丢失）
+      - KEYS_DIR=/app/.cs599-agent
+      # 禁用容器内部代理（Windows Docker Desktop SSL 兼容性）
+      - HTTP_PROXY=
+      - HTTPS_PROXY=
+      - NO_PROXY=*
     depends_on:
-      - research-agent
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      # 研究产物持久化（搜索历史存在 MySQL，不需要挂这个）
+      - ./research_outputs:/app/research_outputs
+      - ./skills_library:/app/skills_library
+      # RAG: ChromaDB 向量数据持久化
+      - chroma_data:/app/.chroma
+      # API Keys 加密存储持久化（避免容器重启后 keys 丢失）
+      - keys_data:/app/.cs599-agent
     networks:
-      - agent-network
-    profiles:
-      - dev  # Only start with: docker compose --profile dev up
+      - cs599net
+    restart: unless-stopped
 
-  # ── Ollama (local models, optional) ───────────────────────────────────
-  # ollama:
-  #   image: ollama/ollama:latest
-  #   container_name: cs599-ollama
-  #   ports:
-  #     - "11434:11434"
-  #   volumes:
-  #     - ollama-data:/root/.ollama
-  #   networks:
-  #     - agent-network
+  mysql:
+    image: mysql:8.0
+    ports:
+      - "3307:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_DATABASE: cs599
+      MYSQL_USER: cs599
+      MYSQL_PASSWORD: cs599pass
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - cs599net
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-prootpass"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
 
-networks:
-  agent-network:
-    driver: bridge
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - cs599net
+    restart: unless-stopped
 
 volumes:
-  ollama-data:
+  mysql_data:
+  redis_data:
+  chroma_data:
+  keys_data:
+
+# 自定义网络：降低 MTU 至 1400 修复 Docker Desktop on Windows (WSL2) 的 TLS 握手失败问题
+# 症状：容器内 HTTPS 请求全部报 SSL: UNEXPECTED_EOF_WHILE_READING
+# 原因：WSL2 网络路径有效 MTU < 1500，TLS 握手大包被丢弃
+# 修复：降低容器网络 MTU，使 TCP 分片在容器出口完成
+networks:
+  cs599net:
+    driver: bridge
+    driver_opts:
+      com.docker.network.driver.mtu: "1400"

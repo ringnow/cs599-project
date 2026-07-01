@@ -48,3 +48,10 @@ tmp/
 # Project data
 .cs599-agent/
 ~/.cs599-agent/
+
+# Local runtime data
+.chroma/
+*.db
+*.db-shm
+*.db-wal
+venv_old_broken/

@@ -6,8 +6,10 @@ export type Tab =
   | "review"
   | "agents"
   | "skills"
+  | "history"
   | "providers"
-  | "settings";
+  | "settings"
+  | "knowledge";
 
 export interface HistoryItem {
   id: string;

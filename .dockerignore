@@ -41,3 +41,12 @@ skills_library/__pycache__/
 
 # Docker
 .dockerignore
+
+# Git (avoid sending repo history + potential old secrets to build context)
+.git/
+.gitignore
+
+# Tests (not needed in production image)
+tests/
+*.md
+!README.md

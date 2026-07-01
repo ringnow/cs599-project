@@ -254,7 +254,7 @@ class ModelManager:
             base_url=provider.config.base_url,
             temperature=temperature,
             timeout=120,  # 单次 LLM 调用等待上限（用户 API 较慢）
-            max_retries=0,  # 不重试，失败则快速返回
+            max_retries=2,  # 网络抖动自动重试 2 次
         )
 
     # --- Health Check ---

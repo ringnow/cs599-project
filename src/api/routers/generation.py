@@ -2,7 +2,7 @@
 from datetime import datetime
 from typing import List
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from src.models.manager import get_model_manager
 from src.models.key_store import get_key_store
 from src.skills.registry import get_skill_registry
@@ -13,6 +13,23 @@ import asyncio
 import concurrent.futures
 
 router = APIRouter()
+
+
+def _format_error(e: Exception) -> str:
+    """Extract the full error chain including __cause__ for ConnectionError etc.
+
+    openai.APIConnectionError str() is just 'Connection error.' — the actual
+    SSL/DNS cause lives in __cause__. This surfaces it for diagnosis.
+    """
+    parts = [str(e)]
+    cause = getattr(e, "__cause__", None) or getattr(e, "__context__", None)
+    if cause and str(cause) not in str(e):
+        parts.append(f" (cause: {cause})")
+    # For APIConnectionError, also show the error type
+    etype = type(e).__name__
+    if etype != "Exception":
+        parts.append(f" [{etype}]")
+    return "".join(parts)[:500]
 
 
 def _mcp_context(mcp_servers: List[str], topic: str) -> tuple:
@@ -48,16 +65,16 @@ def _mcp_context(mcp_servers: List[str], topic: str) -> tuple:
         return "", [f"❌ MCP 管理器错误: {str(e)[:100]}"]
 
 
-def _execute_skill(actual: str, topic: str, provider: str, model: str, params: dict):
+def _execute_skill(actual: str, topic: str, provider: str, model: str, params: dict, user_id: str = ""):
     """Execute a skill and return markdown string + steps."""
-    ctx = SkillContext(topic=topic, provider_name=provider, model_id=model, custom_params=params)
+    ctx = SkillContext(topic=topic, provider_name=provider, model_id=model, custom_params=params, user_id=user_id)
     sr = get_skill_registry().execute(actual, ctx)
     if sr.success:
         return sr.content, sr.steps
     return f"技能执行失败: {sr.error}", sr.steps
 
 
-async def _execute_skill_with_timeout(actual: str, topic: str, provider: str, model: str, params: dict, timeout: int = 600):
+async def _execute_skill_with_timeout(actual: str, topic: str, provider: str, model: str, params: dict, timeout: int = 600, user_id: str = ""):
     """Execute a skill with a timeout to prevent hanging.
 
     Runs the blocking skill code in a thread pool so the async event loop
@@ -71,7 +88,7 @@ async def _execute_skill_with_timeout(actual: str, topic: str, provider: str, mo
     loop = asyncio.get_event_loop()
     try:
         return await asyncio.wait_for(
-            loop.run_in_executor(None, _execute_skill, actual, topic, provider, model, params),
+            loop.run_in_executor(None, _execute_skill, actual, topic, provider, model, params, user_id),
             timeout=timeout,
         )
     except asyncio.TimeoutError:
@@ -111,11 +128,12 @@ def _demo_content(topic: str, task_type: str) -> str:
 
 
 @router.post("/api/report", response_model=ApiResponse)
-async def report(req: ReportRequest):
+async def report(req: ReportRequest, request: Request):
     logs = ["初始化学术报告生成器...", f"分析研究领域: {req.field or '通用'}", f"生成深度: {req.depth}"]
     try:
         depth_map = {"基础": 1, "详细": 3, "专家": 5}
         provider, model = resolve_provider_model(req.provider, req.model)
+        user_id = getattr(request.state, "user", "") or ""
 
         if not has_api_key(provider):
             logs.append("未检测到 API Key，切换至演示模式")
@@ -138,7 +156,7 @@ async def report(req: ReportRequest):
             "reference_count": req.referenceCount,
             "include_charts": req.includeCharts,
             "request_id": req.request_id,
-        })
+        }, timeout=600, user_id=user_id)
         logs.append("报告生成完成！")
 
         # Format steps for display
@@ -154,12 +172,12 @@ async def report(req: ReportRequest):
         save_report("report", req.subject, content)
         return ApiResponse(logs=logs + step_logs, markdown=content, steps=steps)
     except Exception as e:
-        logs.append(f"❌ 报告生成出错: {str(e)[:200]}")
-        return ApiResponse(logs=logs, markdown=f"### ⚠️ 报告生成失败\n\n**错误**: {str(e)[:500]}\n\n请检查服务商配置。")
+        logs.append(f"❌ 报告生成出错: {_format_error(e)}")
+        return ApiResponse(logs=logs, markdown=f"### ⚠️ 报告生成失败\n\n**错误**: {_format_error(e)}\n\n请检查服务商配置。")
 
 
 @router.post("/api/outline", response_model=ApiResponse)
-async def outline(req: OutlineRequest):
+async def outline(req: OutlineRequest, request: Request):
     logs = ["正在调研相关领域...", "正在进行论文构思..."]
     try:
         provider, model = resolve_provider_model(req.provider, req.model)
@@ -168,9 +186,11 @@ async def outline(req: OutlineRequest):
             logs.append("未检测到 API Key，切换至演示模式")
             return ApiResponse(logs=logs, markdown=_demo_content(req.subject, "outline"))
 
+        user_id = getattr(request.state, "user", "") or ""
         actual = req.skill_override if req.skill_override else "research"
         ctx = SkillContext(topic=req.subject, provider_name=provider, model_id=model,
-                           custom_params={"depth": 2, "sources": ["web", "semantic_scholar"], "context": req.context or req.field, "request_id": req.request_id})
+                           custom_params={"depth": 2, "sources": ["web", "semantic_scholar"], "context": req.context or req.field, "request_id": req.request_id},
+                           user_id=user_id)
         research_result = get_skill_registry().execute(actual, ctx)
         logs.append("调研完成，正在生成大纲...")
 
@@ -192,12 +212,12 @@ async def outline(req: OutlineRequest):
         save_report("outline", req.subject, content)
         return ApiResponse(logs=logs, markdown=content)
     except Exception as e:
-        logs.append(f"❌ 大纲生成出错: {str(e)[:200]}")
-        return ApiResponse(logs=logs, markdown=f"### ⚠️ 大纲生成失败\n\n**错误**: {str(e)[:500]}\n\n请检查服务商配置。")
+        logs.append(f"❌ 大纲生成出错: {_format_error(e)}")
+        return ApiResponse(logs=logs, markdown=f"### ⚠️ 大纲生成失败\n\n**错误**: {_format_error(e)}\n\n请检查服务商配置。")
 
 
 @router.post("/api/thesis", response_model=ApiResponse)
-async def thesis(req: ThesisRequest):
+async def thesis(req: ThesisRequest, request: Request):
     style_map = {
         "Nature标准格式": "academic",
         "ACM/IEEE 双栏通排范式": "ieee",
@@ -212,6 +232,7 @@ async def thesis(req: ThesisRequest):
             logs.append("未检测到 API Key，切换至演示模式")
             return ApiResponse(logs=logs, markdown=_demo_content(req.blockTitle, "thesis"))
 
+        user_id = getattr(request.state, "user", "") or ""
         sections = req.sections or ["abstract", "introduction", "methodology", "experiments", "conclusion"]
         actual = req.skill_override if req.skill_override else "paper_writing"
         content, _steps = await _execute_skill_with_timeout(actual, req.blockTitle, provider, model, {
@@ -221,18 +242,18 @@ async def thesis(req: ThesisRequest):
             "sections": sections,
             "context": req.prompt + ("\n" + req.context if req.context else ""),
             "request_id": req.request_id,
-        })
+        }, timeout=600, user_id=user_id)
         logs.append("学术段落生成完成！")
         from src.api.routers.history import save_report
         save_report("thesis", req.blockTitle, content)
         return ApiResponse(logs=logs, markdown=content)
     except Exception as e:
-        logs.append(f"❌ 学术段落生成出错: {str(e)[:200]}")
-        return ApiResponse(logs=logs, markdown=f"### ⚠️ 学术段落生成失败\n\n**错误**: {str(e)[:500]}\n\n请检查服务商配置。")
+        logs.append(f"❌ 学术段落生成出错: {_format_error(e)}")
+        return ApiResponse(logs=logs, markdown=f"### ⚠️ 学术段落生成失败\n\n**错误**: {_format_error(e)}\n\n请检查服务商配置。")
 
 
 @router.post("/api/literature-review", response_model=ApiResponse)
-async def literature_review(req: ReviewRequest):
+async def literature_review(req: ReviewRequest, request: Request):
     logs = [f"开始扫描关于 [{req.keyword}] 的学术文献..."]
     try:
         provider, model = resolve_provider_model(req.provider, req.model)
@@ -241,6 +262,7 @@ async def literature_review(req: ReviewRequest):
             logs.append("未检测到 API Key，切换至演示模式")
             return ApiResponse(logs=logs, markdown=_demo_content(req.keyword, "literature-review"))
 
+        user_id = getattr(request.state, "user", "") or ""
         actual = req.skill_override if req.skill_override else "survey_writing"
         content, _steps = await _execute_skill_with_timeout(actual, req.keyword, provider, model, {
             "scope": req.scope or "focused",
@@ -248,11 +270,11 @@ async def literature_review(req: ReviewRequest):
             "comparisons": req.comparisons,
             "context": req.context or "",
             "request_id": req.request_id,
-        })
+        }, timeout=600, user_id=user_id)
         logs.append("文献综述合成完成！")
         from src.api.routers.history import save_report
         save_report("review", req.keyword, content)
         return ApiResponse(logs=logs, markdown=content)
     except Exception as e:
-        logs.append(f"❌ 文献综述生成出错: {str(e)[:200]}")
-        return ApiResponse(logs=logs, markdown=f"### ⚠️ 文献综述生成失败\n\n**错误**: {str(e)[:500]}\n\n请检查服务商配置。")
+        logs.append(f"❌ 文献综述生成出错: {_format_error(e)}")
+        return ApiResponse(logs=logs, markdown=f"### ⚠️ 文献综述生成失败\n\n**错误**: {_format_error(e)}\n\n请检查服务商配置。")

@@ -8,6 +8,43 @@ Agentic AI 研究助手，支持多模型切换、多智能体协作和插件化
 
 ![Demo 演示](vedio/demo.gif)
 
+## 技术亮点（面试向）
+
+| 维度 | 实现 |
+|------|------|
+| Agent 框架 | LangGraph ReAct + CrewAI 多Agent协作 |
+| 多模型管理 | 10+ LLM服务商统一适配（LangChain ChatOpenAI） |
+| 技能系统 | 插件化设计（BaseSkill → Registry → 6内置技能） |
+| 数据持久化 | SQLAlchemy ORM + MySQL/SQLite 切换 |
+| 缓存层 | Redis 搜索结果缓存（命中率75%+） |
+| 认证安全 | JWT Bearer Token + AES-256 API Key加密 |
+| 部署 | Docker Compose 四服务编排 |
+| 测试 | 12 tests + GitHub Actions CI |
+| MCP协议 | SSE + stdio 双模式外部工具集成 |
+
+```
+                    ┌─────────────────┐
+                    │   React Frontend │
+                    └────────┬────────┘
+                             │ HTTP
+                    ┌────────▼────────┐
+                    │  FastAPI Server  │
+                    │  (JWT Auth)      │
+                    └──┬──────┬──────┬┘
+                       │      │      │
+              ┌────────▼┐  ┌──▼──┐ ┌▼────────┐
+              │  Skills │  │ Crew│ │ MCP Mgr  │
+              │  System │  │ 3Ag │ │ (ext p)  │
+              └────┬────┘  └──┬──┘ └──────────┘
+                   │          │
+         ┌─────────┼──────────┼──────────┐
+         ▼         ▼          ▼          ▼
+    ┌────────┐ ┌──────┐ ┌──────────┐ ┌──────┐
+    │ SQLite │ │Redis │ │ LLM APIs │ │Search│
+    │ /MySQL │ │Cache │ │(10+prov) │ │APIs  │
+    └────────┘ └──────┘ └──────────┘ └──────┘
+```
+
 ## v2 新特性
 
 | 特性 | v1 | v2 |

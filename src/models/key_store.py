@@ -17,8 +17,10 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 
-# Local storage path for API keys
-KEYS_DIR = Path.home() / ".cs599-agent"
+# Local storage path for API keys.
+# Configurable via env var so Docker can mount a persistent volume.
+# Default: ~/.cs599-agent/
+KEYS_DIR = Path(os.getenv("KEYS_DIR", str(Path.home() / ".cs599-agent")))
 KEYS_FILE = KEYS_DIR / "api_keys.enc"
 SALT_FILE = KEYS_DIR / ".salt"
 
@@ -43,23 +45,28 @@ class APIKeyStore:
             SALT_FILE.write_bytes(salt)
     
     def _get_fernet(self) -> Fernet:
-        """Create Fernet instance from machine-specific key."""
-        # Use machine hostname + username as base for key derivation
-        import getpass
-        try:
-            user = os.getlogin()
-        except OSError:
-            user = getpass.getuser()
-        machine_id = f"{user}@{os.uname().nodename}"
+        """Create Fernet instance for encrypting API keys.
+
+        The encryption key is derived from a MASTER_KEY file (stable across
+        container restarts) rather than hostname/username, which change on
+        every Docker container restart and would silently wipe all stored keys.
+        """
+        master_key_file = KEYS_DIR / ".master_key"
+        if not master_key_file.exists():
+            # Generate a random master key on first run.
+            # This file persists in the KEYS_DIR volume, so the key is
+            # stable across container restarts as long as the volume survives.
+            master_key_file.write_bytes(os.urandom(32))
+        master_key = master_key_file.read_bytes()
         salt = SALT_FILE.read_bytes()
-        
+
         kdf = PBKDF2HMAC(
             algorithm=hashes.SHA256(),
             length=32,
             salt=salt,
             iterations=100000,
         )
-        key = base64.urlsafe_b64encode(kdf.derive(machine_id.encode()))
+        key = base64.urlsafe_b64encode(kdf.derive(master_key))
         return Fernet(key)
     
     def _load_keys(self):

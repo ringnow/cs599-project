@@ -142,6 +142,11 @@ async def providers_health():
     mgr = get_model_manager()
     results = {}
     for p in mgr.list_providers():
+        if not p.is_active:
+            continue
+        has_key = bool(p.api_key) or mgr.has_api_key(p.name)
+        if not has_key:
+            continue
         try:
             test_llm = mgr.create_llm_client(p.name, p.default_model or "deepseek-chat", 0.1)
             resp = test_llm.invoke([{"role": "user", "content": "ping"}])

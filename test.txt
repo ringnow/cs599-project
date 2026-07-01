@@ -1,0 +1,66 @@
+16:07:36 [INFO] src.rag.vector_store: ChromaDB initialized at C:\Users\23119\Desktop\cs599-project-audit\.chroma (collection=cs599_knowledge) — 路径基于项目根目录，不依赖 cwd，确保知识库持久化一致
+16:07:36 [INFO] src.rag.vector_store: ChromaDB initialized at C:\Users\23119\Desktop\cs599-project-audit\.chroma (collection=cs599_knowledge) — 路径基于项目根目录，不依赖 cwd，确保知识库持久化一致
+INFO:     127.0.0.1:59324 - "GET /api/knowledge/documents HTTP/1.1" 200 OK
+16:07:38 [INFO] numexpr.utils: NumExpr defaulting to 16 threads.
+INFO:     127.0.0.1:62180 - "GET /api/knowledge/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56855 - "GET /api/knowledge/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64954 - "GET /api/knowledge/documents HTTP/1.1" 200 OK
+16:08:23 [INFO] httpx: HTTP Request: POST https://token.sensenova.cn/v1/chat/completions "HTTP/1.1 200 OK"
+16:08:23 [INFO] src.rag.query_optimizer: Query rewritten: '大作业报告写了什么，里面有图片吗' → '大作业报告的内容构成及其是否包含插图'
+16:08:23 [INFO] src.rag.retriever: Query optimization: '大作业报告写了什么，里面有图片吗' → '大作业报告的内容构成及其是否包含插图'
+16:08:23 [INFO] src.rag.embedder: Loading embedding model: sentence-transformers/all-MiniLM-L6-v2 (device=cpu)
+16:08:26 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/modules.json "HTTP/1.1 307 Temporary Redirect"
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+16:08:26 [WARNING] huggingface_hub.utils._http: Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+16:08:26 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/sentence-transformers/all-MiniLM-L6-v2/1110a243fdf4706b3f48f1d95db1a4f5529b4d41/modules.json "HTTP/1.1 200 OK"
+16:08:26 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/config_sentence_transformers.json "HTTP/1.1 307 Temporary Redirect"
+16:08:26 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/sentence-transformers/all-MiniLM-L6-v2/1110a243fdf4706b3f48f1d95db1a4f5529b4d41/config_sentence_transformers.json "HTTP/1.1 200 OK"
+16:08:26 [INFO] sentence_transformers.base.model: Loading SentenceTransformer model from sentence-transformers/all-MiniLM-L6-v2.
+16:08:27 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/config_sentence_transformers.json "HTTP/1.1 307 Temporary Redirect"
+16:08:27 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/sentence-transformers/all-MiniLM-L6-v2/1110a243fdf4706b3f48f1d95db1a4f5529b4d41/config_sentence_transformers.json "HTTP/1.1 200 OK"
+16:08:27 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/README.md "HTTP/1.1 307 Temporary Redirect"
+16:08:27 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/sentence-transformers/all-MiniLM-L6-v2/1110a243fdf4706b3f48f1d95db1a4f5529b4d41/README.md "HTTP/1.1 200 OK"
+16:08:27 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/modules.json "HTTP/1.1 307 Temporary Redirect"
+16:08:28 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/sentence-transformers/all-MiniLM-L6-v2/1110a243fdf4706b3f48f1d95db1a4f5529b4d41/modules.json "HTTP/1.1 200 OK"
+16:08:28 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/sentence_bert_config.json "HTTP/1.1 307 Temporary Redirect"
+16:08:28 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/sentence-transformers/all-MiniLM-L6-v2/1110a243fdf4706b3f48f1d95db1a4f5529b4d41/sentence_bert_config.json "HTTP/1.1 200 OK"
+16:08:28 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/adapter_config.json "HTTP/1.1 404 Not Found"
+16:08:29 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+16:08:29 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/sentence-transformers/all-MiniLM-L6-v2/1110a243fdf4706b3f48f1d95db1a4f5529b4d41/config.json "HTTP/1.1 200 OK"
+Loading weights: 100%|███████████████████████████████████████████████████████████████████████████████████████████████| 103/103 [00:00<00:00, 7575.46it/s]
+16:08:29 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/processor_config.json "HTTP/1.1 404 Not Found"
+16:08:29 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/preprocessor_config.json "HTTP/1.1 404 Not Found"
+16:08:30 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/video_preprocessor_config.json "HTTP/1.1 404 Not Found"
+16:08:30 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/preprocessor_config.json "HTTP/1.1 404 Not Found"
+16:08:30 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/tokenizer_config.json "HTTP/1.1 307 Temporary Redirect"
+16:08:30 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/sentence-transformers/all-MiniLM-L6-v2/1110a243fdf4706b3f48f1d95db1a4f5529b4d41/tokenizer_config.json "HTTP/1.1 200 OK"
+16:08:31 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+16:08:31 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/sentence-transformers/all-MiniLM-L6-v2/1110a243fdf4706b3f48f1d95db1a4f5529b4d41/config.json "HTTP/1.1 200 OK"
+16:08:31 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+16:08:31 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/sentence-transformers/all-MiniLM-L6-v2/1110a243fdf4706b3f48f1d95db1a4f5529b4d41/config.json "HTTP/1.1 200 OK"
+16:08:32 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/tokenizer_config.json "HTTP/1.1 307 Temporary Redirect"
+16:08:32 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/sentence-transformers/all-MiniLM-L6-v2/1110a243fdf4706b3f48f1d95db1a4f5529b4d41/tokenizer_config.json "HTTP/1.1 200 OK"
+16:08:32 [INFO] httpx: HTTP Request: GET https://huggingface.co/api/models/sentence-transformers/all-MiniLM-L6-v2/tree/main/additional_chat_templates?recursive=false&expand=false "HTTP/1.1 404 Not Found"
+16:08:32 [INFO] httpx: HTTP Request: GET https://huggingface.co/api/models/sentence-transformers/all-MiniLM-L6-v2/tree/main?recursive=true&expand=false "HTTP/1.1 200 OK"
+16:08:33 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/1_Pooling/config.json "HTTP/1.1 307 Temporary Redirect"
+16:08:33 [INFO] httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/sentence-transformers/all-MiniLM-L6-v2/1110a243fdf4706b3f48f1d95db1a4f5529b4d41/1_Pooling%2Fconfig.json "HTTP/1.1 200 OK"
+16:08:34 [INFO] httpx: HTTP Request: GET https://huggingface.co/api/models/sentence-transformers/all-MiniLM-L6-v2 "HTTP/1.1 200 OK"
+C:\Users\23119\Desktop\cs599-project-audit\src\rag\embedder.py:32: FutureWarning: The `get_sentence_embedding_dimension` method has been renamed to `get_embedding_dimension`.
+  logger.info("Embedding model loaded (dim=%d, device=%s)", _model.get_sentence_embedding_dimension(), device)
+16:08:34 [INFO] src.rag.embedder: Embedding model loaded (dim=384, device=cpu)
+Batches: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████| 1/1 [00:00<00:00, 45.39it/s]
+16:08:34 [INFO] src.rag.hybrid_search: BM25 index built with 148 documents
+16:08:34 [WARNING] src.rag.hybrid_search: Failed to load reranker: argument should be a str or an os.PathLike object where __fspath__ returns a str, not 'NoneType'
+16:08:36 [INFO] httpx: HTTP Request: POST https://token.sensenova.cn/v1/chat/completions "HTTP/1.1 200 OK"
+INFO:     127.0.0.1:61177 - "POST /api/knowledge/ask HTTP/1.1" 200 OK
+
+
+16:08:36 [INFO] httpx: HTTP Request: POST https://token.sensenova.cn/v1/chat/completions "HTTP/1.1 200 OK"
+INFO:     127.0.0.1:61177 - "POST /api/knowledge/ask HTTP/1.1" 200 OK
+16:10:05 [INFO] httpx: HTTP Request: POST https://token.sensenova.cn/v1/chat/completions "HTTP/1.1 200 OK"
+16:10:05 [INFO] src.rag.query_optimizer: Query rewritten: '感知模块的测试' → '感知模块测试方法与性能评估'
+16:10:05 [INFO] src.rag.retriever: Query optimization: '感知模块的测试' → '感知模块测试方法与性能评估'
+Batches: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████| 1/1 [00:00<00:00, 99.51it/s]
+16:10:05 [WARNING] src.rag.hybrid_search: Failed to load reranker: argument should be a str or an os.PathLike object where __fspath__ returns a str, not 'NoneType'
+16:10:07 [INFO] httpx: HTTP Request: POST https://token.sensenova.cn/v1/chat/completions "HTTP/1.1 200 OK"
+INFO:     127.0.0.1:58610 - "POST /api/knowledge/ask HTTP/1.1" 200 OK

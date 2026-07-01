@@ -31,6 +31,7 @@ import {
   HelpCircle
 } from "lucide-react";
 import { Tab, HistoryItem, SkillItem } from "./types";
+import { apiFetch } from "./utils/api";
 import { MarkdownRenderer } from "./components/MarkdownRenderer";
 import { ContextAccordion } from "./components/ContextAccordion";
 import { ProviderSelector } from "./components/ProviderSelector";
@@ -38,6 +39,9 @@ import { SkillSelector } from "./components/SkillSelector";
 import { LogPanel } from "./components/LogPanel";
 import { SkillsTab } from "./pages/SkillsTab";
 import { SettingsTab } from "./pages/SettingsTab";
+import { SearchHistoryTab } from "./pages/SearchHistoryTab";
+import { KnowledgeTab } from "./pages/KnowledgeTab";
+import { AuthModal } from "./components/AuthModal";
 
 export default function App() {
   // Navigation & Base States
@@ -85,6 +89,11 @@ export default function App() {
   // Provider/Model selector state
   const [selectedProvider, setSelectedProvider] = useState<string>("");
   const [backendOnline, setBackendOnline] = useState<boolean>(true);
+
+  // Auth state
+  const [authToken, setAuthToken] = useState<string>(() => localStorage.getItem("cs599_token") || "");
+  const [currentUser, setCurrentUser] = useState<string>(() => localStorage.getItem("cs599_username") || "");
+  const [showAuthModal, setShowAuthModal] = useState(false);
 
   // Model sniffing state
   const [sniffedModels, setSniffedModels] = useState<any[]>([]);
@@ -316,6 +325,13 @@ export default function App() {
   };
   const refreshAll = () => { fetchProviders(); fetchPresets(); fetchMcpServers(); fetchTavilyStatus(); fetchStdioStatus(); fetchSearchBackends(); fetchHealth(); };
 
+  const handleLogout = () => {
+    localStorage.removeItem("cs599_token");
+    localStorage.removeItem("cs599_username");
+    setAuthToken("");
+    setCurrentUser("");
+  };
+
   // Load all data on mount
   useEffect(() => { refreshAll(); }, []);
 
@@ -459,7 +475,6 @@ export default function App() {
   // Save Back-end settings to localStorage
   const handleSaveApiSettings = () => {
     localStorage.setItem("cs599_api_url", apiUrl);
-    localStorage.setItem("cs599_api_key", apiKey);
     showToast("服务商配置保存成功");
   };
 
@@ -551,12 +566,15 @@ export default function App() {
 
 
   // Helper: Assemble request headers
+  // JWT authToken is the sole backend auth mechanism. The legacy apiKey
+  // state is kept for interface compatibility but no longer sent — the
+  // backend manages LLM keys server-side via key_store.
   const getRequestHeaders = () => {
     const headers: Record<string, string> = {
       "Content-Type": "application/json"
     };
-    if (apiKey) {
-      headers["Authorization"] = `Bearer ${apiKey}`;
+    if (authToken) {
+      headers["Authorization"] = `Bearer ${authToken}`;
     }
     return headers;
   };
@@ -584,9 +602,8 @@ export default function App() {
     if (!currentMarkdown || exporting) return;
     setExporting(fmt);
     try {
-      const res = await fetch("/api/export", {
+      const res = await apiFetch("/api/export", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           content: currentMarkdown,
           format: fmt,
@@ -595,8 +612,16 @@ export default function App() {
           language: "en",
         }),
       });
-      if (!res.ok) { showToast(`导出失败`); setExporting(""); return; }
       const data = await res.json();
+      if (!res.ok) {
+        // Surface the backend error detail (e.g. "缺少依赖库: docx")
+        const msg = typeof data.detail === "string" ? data.detail
+                  : Array.isArray(data.detail) ? data.detail.map((e:any)=>e.msg).join("; ")
+                  : data.error || "导出失败";
+        showToast(`导出失败: ${msg}`);
+        setExporting("");
+        return;
+      }
       if (data.url) {
         const a = document.createElement("a");
         a.href = data.url;
@@ -1092,6 +1117,30 @@ export default function App() {
               >
                 <span>技能管理</span>
               </button>
+
+              {/* 8. 搜索历史 Tab */}
+              <button
+                onClick={() => setActiveTab("history")}
+                className={`w-full py-2.5 text-xs font-semibold font-sans tracking-wide transition-all duration-200 text-center ${
+                  activeTab === "history"
+                    ? "bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-lg shadow-emerald-500/25 rounded-full border border-emerald-500/10 scale-[1.01]"
+                    : "hover:bg-white/[0.05] text-slate-400 hover:text-slate-100 rounded-full"
+                }`}
+              >
+                <span>搜索历史</span>
+              </button>
+
+              {/* 9. 知识库 Tab */}
+              <button
+                onClick={() => setActiveTab("knowledge")}
+                className={`w-full py-2.5 text-xs font-semibold font-sans tracking-wide transition-all duration-200 text-center ${
+                  activeTab === "knowledge"
+                    ? "bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-lg shadow-emerald-500/25 rounded-full border border-emerald-500/10 scale-[1.01]"
+                    : "hover:bg-white/[0.05] text-slate-400 hover:text-slate-100 rounded-full"
+                }`}
+              >
+                <span>知识库</span>
+              </button>
             </div>
           </div>
 
@@ -1120,8 +1169,36 @@ export default function App() {
               <Settings className="w-3.5 h-3.5" />
               <span>设置</span>
             </button>
+
+            {/* Login / User */}
+            <button
+              onClick={() => { if (currentUser) { handleLogout(); } else { setShowAuthModal(true); } }}
+              className={`w-full flex items-center justify-center gap-2 py-2 rounded-full text-xs font-medium font-sans transition-all duration-200 ${
+                currentUser
+                  ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
+                  : "text-slate-400 hover:text-slate-200 hover:bg-white/[0.03]"
+              }`}
+            >
+              <span className="text-base">{currentUser ? "🔑" : "🔒"}</span>
+              <span>{currentUser || "登录"}</span>
+            </button>
           </div>
         </aside>
+
+        {/* Auth Modal */}
+        {showAuthModal && (
+          <AuthModal
+            key={Date.now()}
+            onClose={() => setShowAuthModal(false)}
+            onLogin={(token, username) => {
+              setAuthToken(token);
+              setCurrentUser(username);
+              setShowAuthModal(false);
+              // 刷新 provider 列表，让用户看到已保存的 API key 状态
+              refreshAll();
+            }}
+          />
+        )}
 
         {/* RIGHT WORKSPACE INTERACTIVE PANELS */}
         <main className="flex-1 flex flex-col h-full overflow-hidden bg-slate-50/50">
@@ -1994,6 +2071,16 @@ export default function App() {
                 latexEnabled={latexEnabled} setLatexEnabled={setLatexEnabled}
                 persistEnabled={persistEnabled} setPersistEnabled={setPersistEnabled}
               />
+            )}
+
+            {/* 10. TAB: 搜索历史 */}
+            {activeTab === "history" && (
+              <SearchHistoryTab />
+            )}
+
+            {/* 11. TAB: 知识库 (RAG) */}
+            {activeTab === "knowledge" && (
+              <KnowledgeTab />
             )}
           </div>
 

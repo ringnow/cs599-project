@@ -1,7 +1,7 @@
 """POST /api/agents-collaborate — Multi-agent collaboration."""
 from datetime import datetime
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from src.models.manager import get_model_manager
 from src.api.schemas import AgentCollaborateRequest, ApiResponse
 from src.api.dependencies import resolve_provider_model, has_api_key
@@ -50,7 +50,7 @@ def _demo_collaboration(topic: str):
 
 
 @router.post("/api/agents-collaborate", response_model=ApiResponse)
-def agents_collaborate(req: AgentCollaborateRequest):
+def agents_collaborate(req: AgentCollaborateRequest, request: Request):
     try:
         provider, model = resolve_provider_model(req.provider, req.model)
         logs = [
@@ -79,7 +79,8 @@ def agents_collaborate(req: AgentCollaborateRequest):
                     "sources": ["web", "semantic_scholar"],
                     "context": req.context or "",
                     "request_id": req.request_id,
-                }
+                },
+                user_id=getattr(request.state, "user", "") or "",
             )
             sr = get_skill_registry().execute(req.skill_override, ctx)
             if sr.success:

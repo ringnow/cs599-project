@@ -36,9 +36,12 @@ export function useApi(opts: UseApiOptions) {
 
   const getRequestHeaders = useCallback((): Record<string, string> => {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (opts.apiKey) headers["Authorization"] = `Bearer ${opts.apiKey}`;
+    // JWT token is the sole backend auth mechanism — read from localStorage
+    // so useApi stays in sync with login/logout without prop-drilling.
+    const token = localStorage.getItem("cs599_token");
+    if (token) headers["Authorization"] = `Bearer ${token}`;
     return headers;
-  }, [opts.apiKey]);
+  }, []);
 
   const getRequestUrl = useCallback((endpoint: string) => {
     const base = opts.apiUrl.trim().replace(/\/$/, "");

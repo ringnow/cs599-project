@@ -30,6 +30,7 @@ class SkillContext:
     previous_results: List['SkillResult'] = field(default_factory=list)
     custom_params: Dict[str, Any] = field(default_factory=dict)
     session_id: str = ""                   # Session tracking
+    user_id: str = ""                      # JWT-authenticated user, if any
     
     def to_dict(self) -> dict:
         return {
@@ -100,29 +101,73 @@ class BaseSkill(ABC):
     def run(self, context: SkillContext) -> SkillResult:
         """Full execution pipeline with validation and hooks."""
         import time
-        
+        from src.api.cancel import is_cancelled, clear as clear_cancelled
+
         # Validate
         valid, error = self.validate_params(context)
         if not valid:
             return SkillResult(success=False, error=error)
-        
+
         # Pre-execute
         context = self.pre_execute(context)
-        
+
+        # 取消检查：在执行前检查是否已被取消
+        request_id = context.custom_params.get("request_id", "")
+        if request_id and is_cancelled(request_id):
+            return SkillResult(
+                success=False,
+                error="任务已被用户取消",
+                content="任务已被用户取消。",
+            )
+
         # Execute
         start = time.time()
         try:
             result = self.execute(context)
         except Exception as e:
             result = SkillResult(success=False, error=str(e))
-        
+
         result.duration_ms = int((time.time() - start) * 1000)
-        
+
         # Post-execute
         result = self.post_execute(result, context)
-        
+
+        # 清理取消标记，避免 _cancelled 字典无限增长
+        if request_id:
+            clear_cancelled(request_id)
+
+        # 自动保存搜索历史到数据库（所有技能执行后统一写入）
+        try:
+            self._save_search_history(context, result)
+        except Exception:
+            pass  # 静默失败，不影响主流程
+
         self.invocation_count += 1
         return result
+
+    def _save_search_history(self, context: SkillContext, result: SkillResult) -> None:
+        """Save search history record after skill execution."""
+        import time as _time
+        from src.storage.database import SessionLocal, save_search
+        db = SessionLocal()
+        try:
+            num_sources = result.metadata.get("num_sources", 0) or len(result.sources)
+            num_papers = result.metadata.get("num_papers_cited", 0) or \
+                         sum(1 for s in result.sources if s.get("type") == "paper")
+            save_search(
+                db_session=db,
+                topic=context.topic,
+                sub_questions=context.sub_questions,
+                num_sources=num_sources,
+                num_papers_cited=num_papers,
+                report_preview=result.content[:500] if result.content else "",
+                duration_seconds=result.duration_ms / 1000.0,
+                provider=context.provider_name,
+                model=context.model_id,
+                username=context.user_id or None,
+            )
+        finally:
+            db.close()
     
     def get_info(self) -> Dict[str, Any]:
         """Get skill information for display."""

@@ -2,7 +2,7 @@
 import json, re
 from datetime import datetime
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from src.models.manager import get_model_manager
 from src.skills.registry import get_skill_registry
 from src.skills.base import SkillContext
@@ -43,7 +43,7 @@ def _demo_content(topic: str) -> str:
 
 
 @router.post("/api/assistant", response_model=ApiResponse)
-def assistant(req: AssistantRequest):
+def assistant(req: AssistantRequest, request: Request):
     logs = ["正在初始化 CS599 智能助手计算流..."]
     try:
         mgr = get_model_manager()
@@ -101,7 +101,8 @@ def assistant(req: AssistantRequest):
         ctx = SkillContext(topic=topic, provider_name=provider, model_id=model,
                            custom_params={"depth": 2, "sources": ["web", "semantic_scholar"],
                                           "context": context or "",
-                                          "request_id": req.request_id})
+                                          "request_id": req.request_id},
+                           user_id=getattr(request.state, "user", "") or "")
         sr = get_skill_registry().execute(skill_map.get(tool, "research"), ctx)
         logs.append("生成完成！")
         if sr.success:
