@@ -94,11 +94,11 @@ def test_token_contains_expiry(set_test_secret):
 
 def test_register_user_success(set_test_secret):
     auth = set_test_secret
-    with patch.object(auth, "SessionLocal") as mock_session_cls:
+    with patch("src.storage.database.SessionLocal") as mock_session_cls:
         mock_session = MagicMock()
         mock_session_cls.return_value.__enter__ = MagicMock(return_value=mock_session)
         mock_session_cls.return_value.__exit__ = MagicMock(return_value=False)
-        with patch.object(auth, "create_user", return_value=True) as mock_create:
+        with patch("src.storage.database.create_user", return_value=True) as mock_create:
             result = auth.register_user("newuser", "password123", "e@b.com")
     assert result is True
     mock_create.assert_called_once()
@@ -106,17 +106,17 @@ def test_register_user_success(set_test_secret):
 
 def test_register_user_duplicate_returns_false(set_test_secret):
     auth = set_test_secret
-    with patch.object(auth, "SessionLocal"):
-        with patch.object(auth, "create_user", return_value=False):
+    with patch("src.storage.database.SessionLocal"):
+        with patch("src.storage.database.create_user", return_value=False):
             result = auth.register_user("existing", "pw", "")
     assert result is False
 
 
 def test_authenticate_user_success(set_test_secret):
     auth = set_test_secret
-    fake_user = {"username": "alice", "hashed_password": auth._hash_pw("pw123")}
-    with patch.object(auth, "SessionLocal"):
-        with patch.object(auth, "get_user_by_username", return_value=fake_user):
+    fake_user = MagicMock(username="alice", hashed_password=auth._hash_pw("pw123"), email="")
+    with patch("src.storage.database.SessionLocal"):
+        with patch("src.storage.database.get_user_by_username", return_value=fake_user):
             result = auth.authenticate_user("alice", "pw123")
     assert result is not None
     assert result["username"] == "alice"
@@ -124,16 +124,16 @@ def test_authenticate_user_success(set_test_secret):
 
 def test_authenticate_user_wrong_password(set_test_secret):
     auth = set_test_secret
-    fake_user = {"username": "alice", "hashed_password": auth._hash_pw("correct")}
-    with patch.object(auth, "SessionLocal"):
-        with patch.object(auth, "get_user_by_username", return_value=fake_user):
+    fake_user = MagicMock(username="alice", hashed_password=auth._hash_pw("correct"), email="")
+    with patch("src.storage.database.SessionLocal"):
+        with patch("src.storage.database.get_user_by_username", return_value=fake_user):
             result = auth.authenticate_user("alice", "wrong")
     assert result is None
 
 
 def test_authenticate_user_not_found(set_test_secret):
     auth = set_test_secret
-    with patch.object(auth, "SessionLocal"):
-        with patch.object(auth, "get_user_by_username", return_value=None):
+    with patch("src.storage.database.SessionLocal"):
+        with patch("src.storage.database.get_user_by_username", return_value=None):
             result = auth.authenticate_user("ghost", "anything")
     assert result is None

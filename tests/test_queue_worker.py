@@ -166,10 +166,17 @@ def test_failed_task_retried_up_to_max():
 
 def test_start_worker_noop_without_redis():
     """start_worker should return early if Redis is unavailable."""
-    with patch.object(w, "_get_redis", return_value=None):
-        w.start_worker(lambda t, p: {})
-    assert w._executor is None
-    assert w._running is False
+    import os
+    saved = os.environ.pop("REDIS_URL", None)
+    import importlib
+    import src.task_queue.worker as w_mod
+    importlib.reload(w_mod)
+    w_mod.start_worker(lambda t, p: {})
+    assert w_mod._executor is None
+    assert w_mod._running is False
+    if saved is not None:
+        os.environ["REDIS_URL"] = saved
+        importlib.reload(w_mod)
 
 
 def test_stop_worker_graceful():
