@@ -3,7 +3,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from typing import Optional
 
-from src.queue.worker import enqueue_task, get_task_status, get_task_result
+from src.task_queue.worker import enqueue_task, get_task_status, get_task_result
 
 router = APIRouter(tags=["queue"])
 

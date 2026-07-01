@@ -14,7 +14,7 @@ import pytest
 # we'll mock _get_redis to control behavior.
 os.environ["REDIS_URL"] = "redis://localhost:6379/0"
 
-from src.queue import worker as w
+from src.task_queue import worker as w
 
 
 @pytest.fixture(autouse=True)
@@ -133,7 +133,7 @@ def test_failed_task_retried_up_to_max():
         w._executor = ThreadPoolExecutor(max_workers=1)
 
         # Submit the poll function
-        import src.queue.worker as worker_mod
+        import src.task_queue.worker as worker_mod
         # Access the inner _poll by starting the worker
         # But we need to control iterations, so let's manually process
         for _ in range(w.RETRY_MAX + 2):

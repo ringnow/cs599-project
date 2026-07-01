@@ -68,8 +68,8 @@ async def lifespan(app: FastAPI):
     await asyncio.to_thread(_ensure_admin)
 
     # start_worker 启动后台消费线程（非阻塞，但内部若失败不应卡住启动）
-    from src.queue.worker import start_worker
-    from src.queue.handler import handle_task
+    from src.task_queue.worker import start_worker
+    from src.task_queue.handler import handle_task
     await asyncio.to_thread(start_worker, handle_task)
 
     _log.info("启动完成：数据库初始化 + 管理员用户 + 队列 worker 已就绪")
@@ -77,7 +77,7 @@ async def lifespan(app: FastAPI):
     yield  # application runs here
 
     # ── Shutdown ──
-    from src.queue.worker import stop_worker
+    from src.task_queue.worker import stop_worker
     await asyncio.to_thread(stop_worker)
     _log.info("已停止队列 worker")
 
