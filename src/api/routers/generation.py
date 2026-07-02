@@ -1,6 +1,6 @@
 """POST /api/report, /api/outline, /api/thesis, /api/literature-review — Generation endpoints."""
 from datetime import datetime
-from typing import List
+from typing import List, Any
 
 from fastapi import APIRouter, Request
 from src.models.manager import get_model_manager
@@ -32,8 +32,15 @@ def _format_error(e: Exception) -> str:
     return "".join(parts)[:500]
 
 
-def _mcp_context(mcp_servers: List[str], topic: str) -> tuple:
-    """Run MCP pre-search and return context snippet + logs."""
+def _mcp_enhance(mcp_servers: List[str], topic: str) -> tuple:
+    """通用 MCP 预搜索：按类型调用各 MCP 服务器，返回 context + logs。
+
+    支持 4 种免费 MCP：
+    - fetch → arxiv API 搜论文 → 解析 Atom XML
+    - filesystem → 扫 research_outputs/ 目录 → 读取已有报告
+    - memory → search_nodes 查历史知识图谱
+    - sequential-thinking → 主题拆解 → 返回子问题列表
+    """
     if not mcp_servers:
         return "", []
     logs = []
@@ -41,28 +48,96 @@ def _mcp_context(mcp_servers: List[str], topic: str) -> tuple:
         from src.mcp.manager import get_mcp_manager
         mgr = get_mcp_manager()
         snippets = []
-        for srv in mcp_servers:
-            logs.append(f"🔌 正在调用 MCP 服务器: {srv}")
+
+        for srv_name in mcp_servers:
+            if not mgr.is_server_enabled(srv_name):
+                logs.append(f"  ⏭️ MCP {srv_name} 未启用，跳过")
+                continue
+
+            logs.append(f"🔌 正在调用 MCP 服务器: {srv_name}")
+
             try:
-                r = mgr.call_tool(srv, "search", {"query": topic, "max_results": 3})
-                if "error" not in r:
-                    parsed = r.get("result", r.get("raw", []))
-                    items = parsed.get("results", parsed) if isinstance(parsed, dict) else (parsed if isinstance(parsed, list) else [])
-                    count = 0
-                    for item in (items if isinstance(items, list) else [items]):
-                        if isinstance(item, dict):
-                            snippets.append(f"- {item.get('title','')}: {item.get('content',item.get('snippet',''))[:200]}")
-                            count += 1
-                    logs.append(f"  ✅ MCP {srv} 返回 {count} 条结果")
+                if "fetch" in srv_name:
+                    # arxiv API 搜索
+                    fetch_url = f"https://export.arxiv.org/api/query?search_query=all:{topic}&max_results=3&sortBy=relevance&sortOrder=descending"
+                    r = mgr.call_tool(srv_name, "fetch", {"url": fetch_url})
+                    papers = _parse_arxiv_xml(r)
+                    for p in papers:
+                        snippets.append(f"[arxiv] {p}")
+                    logs.append(f"  ✅ MCP fetch → arxiv: {len(papers)} 篇论文")
+
+                elif "filesystem" in srv_name:
+                    # 扫本地产物目录
+                    r = mgr.call_tool(srv_name, "list_directory", {"path": "./research_outputs"})
+                    raw = r.get("result", r.get("raw", ""))
+                    items = raw if isinstance(raw, list) else []
+                    matching = [item for item in items if isinstance(item, str) and topic.lower() in item.lower()]
+                    for item in matching[:5]:
+                        snippets.append(f"[本地文件] {item}")
+                    logs.append(f"  ✅ MCP filesystem: 扫描到 {len(matching)} 个相关文件")
+
+                elif "memory" in srv_name:
+                    # 查历史知识图谱
+                    r = mgr.call_tool(srv_name, "search_nodes", {"query": topic})
+                    raw = r.get("result", r.get("raw", ""))
+                    if isinstance(raw, dict) and raw.get("entities"):
+                        for ent in raw["entities"][:3]:
+                            name = ent.get("name", "")
+                            obs = "; ".join(ent.get("observations", [])[:2])
+                            snippets.append(f"[记忆] {name}: {obs[:200]}")
+                    logs.append(f"  ✅ MCP memory: 查询知识图谱完成")
+
+                elif "sequential" in srv_name:
+                    # 分步推理
+                    r = mgr.call_tool(srv_name, "sequentialthinking",
+                                      {"thought": f"Research topic: {topic}. Break down into sub-questions."})
+                    raw = r.get("result", r.get("raw", ""))
+                    if isinstance(raw, dict) and raw.get("thought"):
+                        snippets.append(f"[推理] {raw['thought'][:300]}")
+                    logs.append(f"  ✅ MCP sequential-thinking: 推理完成")
+
                 else:
-                    logs.append(f"  ⚠️ MCP {srv} 调用错误: {r['error'][:100]}")
+                    # 通用 fallback：调 search 工具
+                    r = mgr.call_tool(srv_name, "search", {"query": topic, "max_results": 3})
+                    if "error" not in r:
+                        parsed = r.get("result", r.get("raw", []))
+                        items = parsed.get("results", parsed) if isinstance(parsed, dict) else (parsed if isinstance(parsed, list) else [])
+                        count = 0
+                        for item in (items if isinstance(items, list) else [items]):
+                            if isinstance(item, dict):
+                                snippets.append(f"- {item.get('title','')}: {item.get('content',item.get('snippet',''))[:200]}")
+                                count += 1
+                        logs.append(f"  ✅ MCP {srv_name} 返回 {count} 条结果")
+                    else:
+                        logs.append(f"  ⚠️ MCP {srv_name} 调用错误: {r['error'][:100]}")
+
             except Exception as e:
-                logs.append(f"  ❌ MCP {srv} 异常: {str(e)[:100]}")
+                logs.append(f"  ⚠️ MCP {srv_name} 异常: {str(e)[:100]}")
                 pass
-        context = "\nMCP搜索结果：\n" + "\n".join(snippets[:5]) if snippets else ""
+
+        context = "\nMCP搜索结果：\n" + "\n".join(snippets[:10]) if snippets else ""
         return context, logs
     except Exception as e:
         return "", [f"❌ MCP 管理器错误: {str(e)[:100]}"]
+
+
+def _parse_arxiv_xml(raw: Any) -> List[str]:
+    """解析 arxiv Atom XML 响应 → 论文摘要列表。"""
+    try:
+        import xml.etree.ElementTree as ET
+        result = raw.get("result", "") if isinstance(raw, dict) else str(raw)
+        root = ET.fromstring(result)
+        ns = {"atom": "http://www.w3.org/2005/Atom"}
+        papers = []
+        for entry in root.findall("atom:entry", ns):
+            title = entry.findtext("atom:title", "", ns).strip().replace("\n", " ").replace("  ", " ")
+            summary = entry.findtext("atom:summary", "", ns).strip()[:300].replace("\n", " ")
+            link = entry.findtext("atom:id", "", ns)
+            published = entry.findtext("atom:published", "", ns)[:10]
+            papers.append(f"{title} ({published}) - {summary[:150]}... | {link}")
+        return papers
+    except Exception:
+        return []
 
 
 def _execute_skill(actual: str, topic: str, provider: str, model: str, params: dict, user_id: str = ""):
@@ -141,7 +216,7 @@ async def report(req: ReportRequest, request: Request):
 
         mcp_ctx = ""
         if req.mcp_servers:
-            mcp_ctx, mcp_logs = _mcp_context(req.mcp_servers, req.subject)
+            mcp_ctx, mcp_logs = _mcp_enhance(req.mcp_servers, req.subject)
             logs.extend(mcp_logs)
 
         context = req.context or req.field
@@ -188,8 +263,15 @@ async def outline(req: OutlineRequest, request: Request):
 
         user_id = getattr(request.state, "user", "") or ""
         actual = req.skill_override if req.skill_override else "research"
+
+        # MCP 预搜索
+        mcp_ctx = ""
+        if req.mcp_servers:
+            mcp_ctx, mcp_logs = _mcp_enhance(req.mcp_servers, req.subject)
+            logs.extend(mcp_logs)
+
         ctx = SkillContext(topic=req.subject, provider_name=provider, model_id=model,
-                           custom_params={"depth": 2, "sources": ["web", "semantic_scholar"], "context": req.context or req.field, "request_id": req.request_id},
+                           custom_params={"depth": 2, "sources": ["web", "semantic_scholar"], "context": (req.context or req.field or "") + mcp_ctx, "request_id": req.request_id},
                            user_id=user_id)
         research_result = get_skill_registry().execute(actual, ctx)
         logs.append("调研完成，正在生成大纲...")
@@ -235,12 +317,20 @@ async def thesis(req: ThesisRequest, request: Request):
         user_id = getattr(request.state, "user", "") or ""
         sections = req.sections or ["abstract", "introduction", "methodology", "experiments", "conclusion"]
         actual = req.skill_override if req.skill_override else "paper_writing"
+
+        # MCP 预搜索
+        mcp_ctx = ""
+        if req.mcp_servers:
+            mcp_ctx, mcp_logs = _mcp_enhance(req.mcp_servers, req.blockTitle)
+            logs.extend(mcp_logs)
+
+        combined_context = req.prompt + ("\n" + req.context if req.context else "") + ("\n" + mcp_ctx if mcp_ctx else "")
         content, _steps = await _execute_skill_with_timeout(actual, req.blockTitle, provider, model, {
             "paper_type": req.paper_type or "research",
             "style": style,
             "length": req.length or "medium",
             "sections": sections,
-            "context": req.prompt + ("\n" + req.context if req.context else ""),
+            "context": combined_context,
             "request_id": req.request_id,
         }, timeout=600, user_id=user_id)
         logs.append("学术段落生成完成！")
@@ -264,11 +354,19 @@ async def literature_review(req: ReviewRequest, request: Request):
 
         user_id = getattr(request.state, "user", "") or ""
         actual = req.skill_override if req.skill_override else "survey_writing"
+
+        # MCP 预搜索
+        mcp_ctx = ""
+        if req.mcp_servers:
+            mcp_ctx, mcp_logs = _mcp_enhance(req.mcp_servers, req.keyword)
+            logs.extend(mcp_logs)
+
+        combined_context = (req.context or "") + ("\n" + mcp_ctx if mcp_ctx else "")
         content, _steps = await _execute_skill_with_timeout(actual, req.keyword, provider, model, {
             "scope": req.scope or "focused",
             "taxonomy": req.taxonomy,
             "comparisons": req.comparisons,
-            "context": req.context or "",
+            "context": combined_context,
             "request_id": req.request_id,
         }, timeout=600, user_id=user_id)
         logs.append("文献综述合成完成！")

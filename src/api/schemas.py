@@ -30,6 +30,7 @@ class OutlineRequest(BaseModel):
     paper_type: str = "研究论文"
     context: str = ""
     skill_override: str = ""
+    mcp_servers: List[str] = []
     provider: str = ""
     model: str = ""
     request_id: str = ""
@@ -44,6 +45,7 @@ class ThesisRequest(BaseModel):
     sections: List[str] = []
     context: str = ""
     skill_override: str = ""
+    mcp_servers: List[str] = []
     provider: str = ""
     model: str = ""
     request_id: str = ""
@@ -57,6 +59,7 @@ class ReviewRequest(BaseModel):
     comparisons: bool = True
     context: str = ""
     skill_override: str = ""
+    mcp_servers: List[str] = []
     provider: str = ""
     model: str = ""
     request_id: str = ""

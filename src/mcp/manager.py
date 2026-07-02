@@ -112,6 +112,22 @@ BUILTIN_MCP_PRESETS = {
         description="本地知识图谱记忆系统 — 通过 npx 启动，无需 API Key，免费",
         server_type="stdio",
     ),
+    "fetch": MCPServerConfig(
+        name="fetch",
+        display_name="Fetch (网页抓取) ★免费",
+        url="",
+        tools_prefix="fetch_",
+        description="抓取 arxiv API、网页、在线PDF的文本内容 — 无需 API Key，免费",
+        server_type="stdio",
+    ),
+    "sequential_thinking": MCPServerConfig(
+        name="sequential_thinking",
+        display_name="Sequential Thinking (分步推理) ★免费",
+        url="",
+        tools_prefix="sequential_",
+        description="复杂研究主题的结构化推理链 — 无需 API Key，免费",
+        server_type="stdio",
+    ),
 }
 
 
@@ -142,6 +158,11 @@ class MCPManager:
         MCP_CONFIG_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False))
 
     # ---- CRUD ----
+
+    def is_server_enabled(self, name: str) -> bool:
+        """Check if a server exists and is active."""
+        cfg = self._servers.get(name)
+        return cfg is not None and cfg.is_active
 
     def list_servers(self) -> List[MCPServerConfig]:
         """List all configured MCP servers."""
@@ -265,6 +286,10 @@ class MCPManager:
             elif name == "memory_stdio":
                 memory_path = cfg.url or "/tmp/mcp-memory"
                 cmd = ["npx", "-y", "@modelcontextprotocol/server-memory", memory_path]
+            elif name == "fetch":
+                cmd = ["npx", "-y", "@modelcontextprotocol/server-fetch"]
+            elif name == "sequential_thinking":
+                cmd = ["npx", "-y", "@modelcontextprotocol/server-sequential-thinking"]
             else:
                 return False, f"未知的 stdio MCP: {name}"
 

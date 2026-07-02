@@ -142,6 +142,12 @@ class BaseSkill(ABC):
         except Exception:
             pass  # 静默失败，不影响主流程
 
+        # 自动写入 memory 知识图谱（所有技能执行后统一写入）
+        try:
+            self._save_to_memory(context, result)
+        except Exception:
+            pass
+
         self.invocation_count += 1
         return result
 
@@ -168,6 +174,26 @@ class BaseSkill(ABC):
             )
         finally:
             db.close()
+
+    def _save_to_memory(self, context: SkillContext, result: SkillResult) -> None:
+        """研究结束后自动写入 memory 知识图谱。"""
+        try:
+            from src.mcp.manager import get_mcp_manager
+            mgr = get_mcp_manager()
+            if not mgr.is_server_enabled("memory_stdio"):
+                return
+            topic = context.topic
+            preview = result.content[:200] if result.content else ""
+            if preview:
+                mgr.call_tool("memory_stdio", "create_entities", {
+                    "entities": [{
+                        "name": topic,
+                        "entityType": "research_topic",
+                        "observations": [preview],
+                    }]
+                })
+        except Exception:
+            pass
     
     def get_info(self) -> Dict[str, Any]:
         """Get skill information for display."""

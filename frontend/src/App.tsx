@@ -1418,6 +1418,39 @@ export default function App() {
                         <span className="text-[10px] text-gray-400 select-none">20</span>
                       </div>
                     </div>
+
+                    {/* MCP 增强搜索选择器 */}
+                    <div className="border-t border-gray-100 pt-3 mt-2">
+                      <div className="flex items-center gap-1.5 mb-2">
+                        <span className="text-xs font-semibold text-gray-700">🔌 MCP 增强搜索</span>
+                        <span className="text-[9px] text-gray-400">（免费，自动增强检索）</span>
+                      </div>
+                      <div className="space-y-1.5">
+                        {[
+                          { key: "fetch", label: "网页抓取 (fetch)", desc: "搜 arxiv 论文 + 网页" },
+                          { key: "filesystem_stdio", label: "本地文件 (filesystem)", desc: "读本地论文 PDF" },
+                          { key: "memory_stdio", label: "研究记忆 (memory)", desc: "跨会话知识图谱" },
+                          { key: "sequential_thinking", label: "分步推理 (sequential)", desc: "查询优化 + 论文规划" },
+                        ].map((mcp) => (
+                          <label key={mcp.key} className="flex items-center gap-2 py-1 px-2 rounded-lg hover:bg-slate-50 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={selectedMcpServers.includes(mcp.key)}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setSelectedMcpServers([...selectedMcpServers, mcp.key]);
+                                } else {
+                                  setSelectedMcpServers(selectedMcpServers.filter((k) => k !== mcp.key));
+                                }
+                              }}
+                              className="w-3.5 h-3.5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                            />
+                            <span className="text-xs font-medium text-gray-700">{mcp.label}</span>
+                            <span className="text-[10px] text-gray-400 ml-1">{mcp.desc}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
                   </div>
                 </div>
 
