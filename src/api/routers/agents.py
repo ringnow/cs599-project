@@ -59,6 +59,14 @@ def agents_collaborate(req: AgentCollaborateRequest, request: Request):
             f"文档类型: {req.doc_type}, 迭代轮数: {req.iterations}",
         ]
 
+        # MCP 预搜索
+        mcp_ctx = ""
+        mcp_arxiv = []
+        if req.mcp_servers:
+            from src.api.routers.generation import _mcp_enhance
+            mcp_ctx, mcp_logs, mcp_arxiv = _mcp_enhance(req.mcp_servers, req.topic)
+            logs.extend(mcp_logs)
+
         # Check API key before any LLM calls
         if not has_api_key(provider):
             logs.append("未检测到 API Key，切换至演示模式")
@@ -78,6 +86,7 @@ def agents_collaborate(req: AgentCollaborateRequest, request: Request):
                     "depth": 2,
                     "sources": ["web", "semantic_scholar"],
                     "context": req.context or "",
+                    "mcp_search_results": mcp_arxiv,
                     "request_id": req.request_id,
                 },
                 user_id=getattr(request.state, "user", "") or "",

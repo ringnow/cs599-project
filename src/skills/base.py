@@ -142,6 +142,12 @@ class BaseSkill(ABC):
         except Exception:
             pass  # 静默失败，不影响主流程
 
+        # 自动入库到 RAG 知识库（所有技能执行后统一写入）
+        try:
+            self._ingest_to_rag(context, result)
+        except Exception:
+            pass
+
         # 自动写入 memory 知识图谱（所有技能执行后统一写入）
         try:
             self._save_to_memory(context, result)
@@ -192,6 +198,21 @@ class BaseSkill(ABC):
                         "observations": [preview],
                     }]
                 })
+        except Exception:
+            pass
+
+    def _ingest_to_rag(self, context: SkillContext, result: SkillResult) -> None:
+        """自动将生成内容入库到 RAG 知识库。"""
+        try:
+            from src.rag.retriever import ingest_text, is_rag_available
+            if not is_rag_available():
+                return
+            content = result.content
+            if not content or len(content) < 200:
+                return
+            topic = context.topic or "unnamed"
+            ingest_text(text=content, title=topic, doc_type="generated_report",
+                        username=context.user_id or None)
         except Exception:
             pass
     

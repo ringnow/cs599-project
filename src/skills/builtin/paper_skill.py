@@ -83,16 +83,20 @@ class PaperWritingSkill(BaseSkill):
             return SkillResult(success=False, error=f"LLM 客户端创建失败: {e}")
 
         try:
-            # Step 1: Gather research material
+            # Step 1: Gather research material (injects MCP arxiv papers into ss_orig)
             steps.append({"step": 1, "action": "research", "status": "running"})
-            research_data = self._gather_research(topic, steps)
+            research_data = self._gather_research(topic, steps, context)
             steps[-1]["status"] = "done"
 
             # Step 2: Evaluate academic papers using ResearchSkill's evaluation pipeline
             # (composition mode — reuse research_skill's LLM evaluation instead of LLM-fabricated refs)
+            # arxiv papers from MCP are merged into ss_orig so they go through the same evaluation
             evaluated_papers = []
             worth_citing_papers = []
             ss_orig = research_data.get("_ss_orig", [])
+            arxiv_count = research_data.get("_arxiv_count", 0)
+            if arxiv_count:
+                steps[-1]["result"] = f"Gathered {len(ss_orig)} papers ({arxiv_count} from MCP arxiv)"
             if ss_orig:
                 steps.append({"step": 2, "action": "evaluate_papers", "status": "running"})
                 try:
@@ -190,20 +194,46 @@ class PaperWritingSkill(BaseSkill):
             steps=steps,
         )
     
-    def _gather_research(self, topic: str, steps: list) -> Dict:
-        """Gather research material for the paper."""
+    def _gather_research(self, topic: str, steps: list, context: SkillContext = None) -> Dict:
+        """Gather research material for the paper.
+
+        If context is provided, MCP arxiv papers from context.custom_params['mcp_search_results']
+        are converted to SearchResult objects and merged into ss_results so they enter the
+        same LLM evaluation pipeline as Semantic Scholar papers.
+        """
         # Keep original SearchResult objects for LLM evaluation
         web_results = web_search(topic, max_results=5)
         ss_results = semantic_scholar_search(topic, max_results=5)
-        
+
+        # Inject MCP arxiv papers into ss_results so they go through _evaluate_papers
+        arxiv_count = 0
+        if context is not None:
+            mcp_results = context.custom_params.get("mcp_search_results", [])
+            for mr in mcp_results:
+                try:
+                    snippet = mr.get("snippet", "")
+                    ss_results.append(SearchResult(
+                        title=mr.get("title", ""),
+                        url=mr.get("url", ""),
+                        snippet=snippet,
+                        content=snippet,
+                        source="arxiv",
+                        year=mr.get("year", 0),
+                        authors=mr.get("authors", []),
+                    ))
+                    arxiv_count += 1
+                except Exception:
+                    pass
+
         sources = []
         for r in web_results:
             sources.append({"title": r.title, "url": r.url, "type": "web"})
         for r in ss_results:
-            sources.append({"title": r.title, "url": r.url, "type": "semantic_scholar"})
-        
+            src_type = "arxiv" if r.source == "arxiv" else "semantic_scholar"
+            sources.append({"title": r.title, "url": r.url, "type": src_type})
+
         snippets = [r.snippet for r in web_results + ss_results if r.snippet]
-        
+
         return {
             "topic": topic,
             "web_results": [r.__dict__ for r in web_results],
@@ -212,6 +242,7 @@ class PaperWritingSkill(BaseSkill):
             "snippets": "\n".join(snippets[:10]),
             "_web_orig": web_results,
             "_ss_orig": ss_results,
+            "_arxiv_count": arxiv_count,
         }
     
     def _get_section_prompts(self, style: str, paper_type: str, length: str) -> Dict[str, str]:

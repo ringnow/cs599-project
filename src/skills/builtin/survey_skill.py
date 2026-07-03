@@ -62,11 +62,12 @@ class SurveyWritingSkill(BaseSkill):
         evaluated_papers = []
         worth_citing_papers = []
 
-        # Step 1: Gather sources
+        # Step 1: Gather sources (injects MCP arxiv papers into ss_results)
         steps.append({"step": 1, "action": "gather_sources", "status": "running"})
-        sources, ss_results = self._gather_sources(topic)
+        sources, ss_results = self._gather_sources(topic, context)
+        arxiv_count = sum(1 for r in ss_results if r.source == "arxiv")
         steps[-1]["status"] = "done"
-        steps[-1]["result"] = f"Found {len(sources)} sources"
+        steps[-1]["result"] = f"Found {len(sources)} sources" + (f" ({arxiv_count} from MCP arxiv)" if arxiv_count else "")
 
         # Step 1b: Evaluate academic papers using ResearchSkill's pipeline
         if ss_results:
@@ -125,8 +126,12 @@ class SurveyWritingSkill(BaseSkill):
             sources=sources,
         )
     
-    def _gather_sources(self, topic: str) -> tuple:
+    def _gather_sources(self, topic: str, context: SkillContext = None) -> tuple:
         """Gather sources for the survey.
+
+        If context is provided, MCP arxiv papers from context.custom_params['mcp_search_results']
+        are converted to SearchResult objects and merged into ss_results so they enter the
+        same LLM evaluation pipeline as Semantic Scholar papers.
 
         Returns:
             (sources_dicts, ss_orig) — dicts for prompt building,
@@ -135,9 +140,28 @@ class SurveyWritingSkill(BaseSkill):
         ss_results = semantic_scholar_search(topic, max_results=8)
         web_results = web_search(f"{topic} survey review", max_results=5)
 
+        # Inject MCP arxiv papers into ss_results so they go through _evaluate_papers
+        if context is not None:
+            mcp_results = context.custom_params.get("mcp_search_results", [])
+            for mr in mcp_results:
+                try:
+                    snippet = mr.get("snippet", "")
+                    ss_results.append(SearchResult(
+                        title=mr.get("title", ""),
+                        url=mr.get("url", ""),
+                        snippet=snippet,
+                        content=snippet,
+                        source="arxiv",
+                        year=mr.get("year", 0),
+                        authors=mr.get("authors", []),
+                    ))
+                except Exception:
+                    pass
+
         sources = []
         for r in ss_results:
-            sources.append({"title": r.title, "url": r.url, "type": "semantic_scholar", "snippet": r.snippet})
+            src_type = "arxiv" if r.source == "arxiv" else "semantic_scholar"
+            sources.append({"title": r.title, "url": r.url, "type": src_type, "snippet": r.snippet})
         for r in web_results:
             sources.append({"title": r.title, "url": r.url, "type": "web", "snippet": r.snippet})
         return sources, ss_results

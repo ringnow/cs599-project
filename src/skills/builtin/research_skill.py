@@ -48,6 +48,40 @@ class ResearchSkill(BaseSkill):
         all_results = []
         all_extracted = []
 
+        # 注入 MCP 预搜索的 arxiv 结果，使其经过论文评估管道
+        mcp_results = context.custom_params.get("mcp_search_results", [])
+        logger.info("  🔍 execute: mcp_search_results count = %d", len(mcp_results))
+        for mr in mcp_results:
+            try:
+                from src.agent.state import SearchResult
+                snippet = mr.get("snippet", "")
+                all_results.append(SearchResult(
+                    title=mr.get("title", ""),
+                    url=mr.get("url", ""),
+                    snippet=snippet,
+                    content=snippet,
+                    source="arxiv",
+                    year=mr.get("year", 0),
+                    authors=mr.get("authors", []),
+                ))
+            except Exception as _mcp_err:
+                logger.warning("  ⚠️ MCP SearchResult 创建失败: %s", _mcp_err)
+        if mcp_results:
+            logger.info("  📡 MCP arxiv: %d papers injected into evaluation pipeline", len(mcp_results))
+
+        # 从 mcp_results 构建可读文本，直接注入 rag_context（不依赖 mcp_context_text）
+        mcp_context_text = ""
+        for mr in mcp_results:
+            title = mr.get("title", "")
+            authors = mr.get("authors", [])
+            year = mr.get("year", "")
+            url = mr.get("url", "")
+            snippet = mr.get("snippet", "")[:300]
+            author_str = ", ".join(authors[:3]) if authors else ""
+            mcp_context_text += f"[arxiv] {author_str} ({year}). {title}. {snippet}\n\n"
+        if mcp_context_text:
+            logger.info("  📡 MCP text context: %d chars (from %d papers)", len(mcp_context_text), len(mcp_results))
+
         # 初始化跟踪变量，确保 finally 块中可访问（即使中途取消/异常）
         sub_questions: List[str] = []
         sources_list: List[Dict] = []
@@ -96,6 +130,8 @@ class ResearchSkill(BaseSkill):
                     rag_result = retrieve(topic, top_k=5, username=context.user_id or None)
                     if rag_result["context_text"]:
                         rag_context = rag_result["context_text"]
+                        if mcp_context_text:
+                            rag_context = mcp_context_text + "\n\n" + rag_context
                         rag_hits_count = rag_result["good_hits"]
                         steps.append({
                             "step": 0.5,
@@ -106,7 +142,11 @@ class ResearchSkill(BaseSkill):
                         })
                         logger.info("  📚 RAG: %d local hits for %r", rag_hits_count, topic)
                     else:
-                        logger.info("  📚 RAG: no local hits, will search online")
+                        if mcp_context_text:
+                            rag_context = mcp_context_text
+                            logger.info("  📡 MCP context: %d chars (no RAG)", len(mcp_context_text))
+                        else:
+                            logger.info("  📚 RAG: no local hits, will search online")
             except Exception as _rag_err:
                 logger.warning("  ⚠️ RAG retrieval failed: %s", _rag_err)
 
@@ -142,7 +182,7 @@ class ResearchSkill(BaseSkill):
                     steps.append(step_info)
                     future = executor.submit(
                         self._research_single, question, sources, depth, request_id,
-                        _api_key, _base_url, _model_id,
+                        _api_key, _base_url, _model_id, all_results[:],
                     )
                     future_map[future] = (i, step_info)
 
@@ -197,7 +237,7 @@ class ResearchSkill(BaseSkill):
                 entry = {
                     "title": ev["title"],
                     "url": ev.get("url", ""),
-                    "source": "semantic_scholar",
+                    "source": ev.get("source", "semantic_scholar"),
                     "ref_num": ev.get("ref_num", len(sources_list) + 1),
                     "authors": ev.get("authors", []),
                     "year": ev.get("year", 0),
@@ -219,7 +259,7 @@ class ResearchSkill(BaseSkill):
                     sources_list.append({
                         "title": ev["title"],
                         "url": ev.get("url", ""),
-                        "source": "semantic_scholar",
+                        "source": ev.get("source", "semantic_scholar"),
                         "ref_num": ev.get("ref_num", len(sources_list) + 1),
                         "authors": ev.get("authors", []),
                         "year": ev.get("year", 0),
@@ -386,7 +426,8 @@ class ResearchSkill(BaseSkill):
                     logger.warning("  ⚠️ finally 兜底保存搜索历史失败: %s", _hist_err)
 
     def _research_single(self, question: str, sources: List[str], depth: int,
-                          request_id: str, api_key: str, base_url: str, model_id: str):
+                          request_id: str, api_key: str, base_url: str, model_id: str,
+                          mcp_papers: list = None):
         """Search + READ PAPERS + extract + evaluate + synthesise ONE sub-question.
 
         Key improvements over old version:
@@ -405,7 +446,10 @@ class ResearchSkill(BaseSkill):
 
         search_results = []
 
-        # ---- Web search (background context only, not formal references) ----
+        # 将 MCP arxiv 论文注入评估管道（在每个子问题中都参与评估）
+        if mcp_papers:
+            search_results.extend(mcp_papers)
+            logger.info("  📡 MCP arxiv: %d papers mixed into evaluation", len(mcp_papers))
         if "web" in sources:
             web_results = web_search(question, max_results=3 + depth)
             search_results.extend(web_results)
@@ -441,18 +485,19 @@ class ResearchSkill(BaseSkill):
 
         # ---- Read paper content (download PDF or API fetch) ----
         for r in search_results:
-            if r.source == "semantic_scholar":
-                logger.info("  📖 正在阅读论文: %s...", r.title[:60])
-                content = extract_paper_content(r)
-                if content:
-                    r.content = content
-                    logger.info("     ✓ 获取到 %d 字内容", len(content))
-                else:
-                    logger.warning("     ⚠️ 未能获取论文内容")
-                    r.content = r.snippet[:2000] if r.snippet else ""
+            if r.source == "semantic_scholar" or r.source == "arxiv":
+                if r.source == "semantic_scholar":
+                    logger.info("  📖 正在阅读论文: %s...", r.title[:60])
+                    content = extract_paper_content(r)
+                    if content:
+                        r.content = content
+                        logger.info("     ✓ 获取到 %d 字内容", len(content))
+                    else:
+                        logger.warning("     ⚠️ 未能获取论文内容")
+                        r.content = r.snippet[:2000] if r.snippet else ""
 
         # ---- Evaluate academic papers with LLM ----
-        academic_papers = [r for r in search_results if r.source == "semantic_scholar" and r.content]
+        academic_papers = [r for r in search_results if r.source in ("semantic_scholar", "arxiv") and r.content]
         evaluated_papers = []
         paper_evaluations = []
         if academic_papers and api_key and base_url and model_id:
@@ -497,7 +542,7 @@ class ResearchSkill(BaseSkill):
         # Fallback: if no evaluated papers, still use abstracts
         if not evaluated_papers:
             for r in search_results:
-                if r.source == "semantic_scholar":
+                if r.source in ("semantic_scholar", "arxiv"):
                     extracted.append(f"[学术论文] {r.title}\n摘要: {r.snippet[:1500]}")
                     # Create a basic evaluation for tracking
                     if r.content:
@@ -594,6 +639,7 @@ Example: ["What is X and how did it originate?", "What are the main approaches t
                 evaluations.append({
                     "ref_num": idx,
                     "title": paper.title,
+                    "source": paper.source,
                     "authors": paper.authors or [],
                     "year": paper.year,
                     "journal": paper.journal,
@@ -688,12 +734,14 @@ Example: ["What is X and how did it originate?", "What are the main approaches t
                 result["journal"] = paper.journal
                 result["url"] = paper.url
                 result["_paper"] = paper
+                result["source"] = paper.source  # 保留来源标记
                 evaluations.append(result)
                 logger.info("  📋 论文 #%d 评估完成: %s %s", idx, result.get('relevance','?'), '✅' if result.get('worth_citing') else '❌')
             except Exception as e:
                 evaluations.append({
                     "ref_num": idx,
                     "title": paper.title,
+                    "source": paper.source,
                     "key_findings": f"评估失败: {e}",
                     "relevance": "低",
                     "worth_citing": False,

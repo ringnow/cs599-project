@@ -24,6 +24,10 @@ def get_model():
     global _model
     if _model is None:
         try:
+            # 强制离线模式：模型已缓存后不再访问 HuggingFace hub
+            os.environ.setdefault("HF_HUB_OFFLINE", "1")
+            os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
             from sentence_transformers import SentenceTransformer
             import torch
             device = os.getenv("EMBEDDING_DEVICE", "cuda" if torch.cuda.is_available() else "cpu")

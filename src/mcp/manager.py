@@ -15,6 +15,7 @@ import asyncio
 import json
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -37,6 +38,13 @@ except ImportError:
 # Config storage
 MCP_CONFIG_DIR = Path.home() / ".cs599-agent"
 MCP_CONFIG_FILE = MCP_CONFIG_DIR / "mcp_servers.json"
+
+
+def _win32_npx_cmd(cmd: list[str]) -> list[str]:
+    """Wrap npx command for Windows (npx.CMD needs cmd.exe /c)."""
+    if os.name == "nt":
+        return ["cmd.exe", "/c"] + cmd
+    return cmd
 
 
 @dataclass
@@ -187,6 +195,7 @@ class MCPManager:
             tools_prefix=preset.tools_prefix,
             description=preset.description,
             is_active=True,
+            server_type=preset.server_type,
         )
         self._servers[config.name] = config
         self._save()
@@ -282,21 +291,22 @@ class MCPManager:
                 allowed_dir = cfg.url or "/tmp/mcp-allowed"
                 # Ensure the directory exists
                 Path(allowed_dir).mkdir(parents=True, exist_ok=True)
-                cmd = ["npx", "-y", "@modelcontextprotocol/server-filesystem", allowed_dir]
+                cmd = _win32_npx_cmd(["npx", "-y", "@modelcontextprotocol/server-filesystem", allowed_dir])
             elif name == "memory_stdio":
                 memory_path = cfg.url or "/tmp/mcp-memory"
-                cmd = ["npx", "-y", "@modelcontextprotocol/server-memory", memory_path]
-            elif name == "fetch":
-                cmd = ["npx", "-y", "@modelcontextprotocol/server-fetch"]
+                cmd = _win32_npx_cmd(["npx", "-y", "@modelcontextprotocol/server-memory", memory_path])
             elif name == "sequential_thinking":
-                cmd = ["npx", "-y", "@modelcontextprotocol/server-sequential-thinking"]
+                cmd = _win32_npx_cmd(["npx", "-y", "@modelcontextprotocol/server-sequential-thinking"])
+            elif name == "fetch":
+                # fetch 不走 npx —— 在 _call_via_stdio 中用直接 HTTP 实现
+                return True, f"{cfg.display_name} （直连 HTTP，无需子进程）"
             else:
                 return False, f"未知的 stdio MCP: {name}"
 
             proc = subprocess.Popen(
                 cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,    # ★ R2: 避免 npm 进度条塞满管道
+                stderr=sys.stderr,            # ★ R2: 错误直接打到终端
                 cwd=str(MCP_CONFIG_DIR),
             )
             # Wait briefly to check if it started
@@ -390,7 +400,7 @@ class MCPManager:
 
         try:
             # Start Tavily MCP Server via npx
-            cmd = ["npx", "-y", "@tavily/mcp@latest"]
+            cmd = _win32_npx_cmd(["npx", "-y", "@tavily/mcp@latest"])
             self._tavily_process = subprocess.Popen(
                 cmd,
                 env=env,
@@ -462,7 +472,11 @@ class MCPManager:
         if not HAS_MCP_SDK:
             return {"error": "mcp Python SDK not installed. Run: pip install mcp"}
 
-        if cfg.server_type == "sse" or cfg.url.startswith("https://"):
+        # Robust routing: known stdio-only tools_prefixes always go to stdio,
+        # even if server_type was corrupted to "sse" in saved config.
+        _STDIO_PREFIXES = {"filesystem_", "memory_", "fetch_", "sequential_", "tavily_"}
+        if cfg.server_type == "sse" and not cfg.url.startswith("https://") and \
+           cfg.tools_prefix not in _STDIO_PREFIXES:
             return await self._call_via_sse(cfg, tool_name, arguments)
         else:
             return await self._call_via_stdio(cfg, tool_name, arguments)
@@ -522,12 +536,46 @@ class MCPManager:
                     command="npx",
                     args=["-y", "@modelcontextprotocol/server-memory", memory_path],
                 )
+            elif cfg.tools_prefix == "fetch_":
+                # Fetch MCP — 包 @modelcontextprotocol/server-fetch 不存在于 npm
+                # 直接用 HTTP 请求 arxiv API，不依赖 npx 子进程
+                url = arguments.get("url", "")
+                if not url:
+                    return {"error": "fetch: missing url argument"}
+                import httpx as _httpx
+                import time as _time
+                # arxiv 限流：重试 3 次，指数退避（5s/10s/15s）
+                for _retry in range(3):
+                    try:
+                        _resp = _httpx.get(url, timeout=30.0, follow_redirects=True)
+                        if _resp.status_code == 429:
+                            _wait = 5 * (_retry + 1)
+                            _time.sleep(_wait)
+                            continue
+                        _resp.raise_for_status()
+                        return {"result": _resp.text, "raw": _resp.text, "_direct_http": True}
+                    except _httpx.HTTPStatusError as _e:
+                        if _e.response.status_code == 429 and _retry < 2:
+                            _wait = 5 * (_retry + 1)
+                            _time.sleep(_wait)
+                            continue
+                        return {"error": f"fetch HTTP error: {_e}"}
+                    except Exception as _e:
+                        return {"error": f"fetch HTTP error: {_e}"}
+                return {"error": "fetch HTTP error: max retries exceeded"}
+            elif cfg.tools_prefix == "sequential_":
+                # Sequential Thinking MCP — structured reasoning
+                server_params = StdioServerParameters(
+                    command="npx",
+                    args=["-y", "@modelcontextprotocol/server-sequential-thinking"],
+                )
             else:
                 return {"error": f"stdio transport not supported for: {cfg.name}"}
 
             async with stdio_client(server_params) as (read, write):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
+                    await session.list_tools()         # ★ R3: 预热
                     result = await session.call_tool(tool_name, arguments=arguments)
                     return self._parse_tool_result(result)
         except Exception as e:
@@ -537,18 +585,30 @@ class MCPManager:
     def _parse_tool_result(result) -> dict:
         """Parse MCP tool result into a dict."""
         try:
+            # ★ R1: 捕获 server 标记的错误（isError=true）
+            if getattr(result, "isError", False):
+                text = ""
+                if getattr(result, "content", None):
+                    for block in result.content:
+                        if getattr(block, "text", None):
+                            text += block.text
+                return {"error": f"MCP tool reported error: {text.strip()[:500]}"}
+
             content_blocks = []
             if hasattr(result, 'content') and result.content:
                 for block in result.content:
-                    if hasattr(block, 'text'):
+                    if hasattr(block, 'text') and block.text:
                         content_blocks.append(block.text)
+
+            # Join all text blocks into a single string
+            result_str = "\n".join(content_blocks)
 
             # Try to parse as JSON
             try:
-                parsed = json.loads(content_blocks[0]) if content_blocks else {}
-                return {"result": parsed, "raw": content_blocks}
+                parsed = json.loads(result_str) if result_str else {}
+                return {"result": parsed, "raw": result_str}
             except json.JSONDecodeError:
-                return {"result": content_blocks, "raw": content_blocks}
+                return {"result": result_str, "raw": result_str}
         except Exception as e:
             return {"error": f"解析 MCP 结果失败: {e}"}
 
@@ -573,7 +633,7 @@ class MCPManager:
         try:
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                 future = pool.submit(_run_in_new_loop)
-                return future.result(timeout=60)
+                return future.result(timeout=180)
         except concurrent.futures.TimeoutError:
             return {"error": "MCP call timed out (60s)"}
         except Exception as e:

@@ -1,5 +1,6 @@
 """POST /api/assistant — Smart assistant with intent analysis."""
 import json, re
+import logging
 from datetime import datetime
 
 from fastapi import APIRouter, Request
@@ -10,6 +11,7 @@ from src.api.schemas import AssistantRequest, ApiResponse
 from src.api.dependencies import resolve_provider_model, has_api_key
 
 router = APIRouter()
+logger = logging.getLogger("cs599.assistant")
 
 
 def _demo_content(topic: str) -> str:
@@ -49,6 +51,17 @@ def assistant(req: AssistantRequest, request: Request):
         mgr = get_model_manager()
         provider, model = resolve_provider_model(req.provider, req.model)
 
+        # MCP 预搜索
+        mcp_ctx = ""
+        if req.mcp_servers:
+            from src.api.routers.generation import _mcp_enhance
+            mcp_ctx, mcp_logs, mcp_arxiv = _mcp_enhance(req.mcp_servers, req.prompt)
+            logs.extend(mcp_logs)
+            logger.info("  🔍 _mcp_enhance returned %d arxiv papers", len(mcp_arxiv))
+            if mcp_arxiv:
+                req.mcp_search_results = mcp_arxiv
+                logger.info("  🔍 mcp_arxiv[0] = %s", mcp_arxiv[0].get("title", "no title")[:60])
+
         # Check API key before any LLM calls
         if not has_api_key(provider):
             logs.append("未检测到 API Key，切换至演示模式")
@@ -58,6 +71,8 @@ def assistant(req: AssistantRequest, request: Request):
         logs.append("正在分析语义意图与路由决策...")
         llm = mgr.create_llm_client(provider, model, 0.3)
         ctx_block = f"\n上下文：{req.context}" if req.context else ""
+        if mcp_ctx:
+            ctx_block += f"\n\nMCP搜索结果：{mcp_ctx[:1000]}"
         prompt = f"""分析用户需求，判断工具。可用工具：research/survey_writing/paper_writing/crew/chat。
 用户输入：{req.prompt}{ctx_block}
 只输出JSON：{{"tool": "...", "topic": "...", "reason": "..."}}"""
@@ -73,6 +88,8 @@ def assistant(req: AssistantRequest, request: Request):
         if tool in ("research", "survey_writing", "paper_writing", "crew"):
             logs.append("正在搜索学术信息...")
             context = req.context or ""
+            if mcp_ctx:
+                context += mcp_ctx
             logs.append("已传递上下文，开始执行技能模块...")
 
         logs.append(f"执行 {tool} 模块...")
@@ -101,8 +118,12 @@ def assistant(req: AssistantRequest, request: Request):
         ctx = SkillContext(topic=topic, provider_name=provider, model_id=model,
                            custom_params={"depth": 2, "sources": ["web", "semantic_scholar"],
                                           "context": context or "",
-                                          "request_id": req.request_id},
+                                          "request_id": req.request_id,
+                                          "mcp_search_results": mcp_arxiv if mcp_arxiv else [],
+                                          "mcp_context_text": mcp_ctx},
                            user_id=getattr(request.state, "user", "") or "")
+        logger.info("  🔍 SkillContext custom_params keys: %s", list(ctx.custom_params.keys()))
+        logger.info("  🔍 mcp_search_results in ctx: %d", len(ctx.custom_params.get("mcp_search_results", [])))
         sr = get_skill_registry().execute(skill_map.get(tool, "research"), ctx)
         logs.append("生成完成！")
         if sr.success:

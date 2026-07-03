@@ -1,4 +1,5 @@
 """POST /api/report, /api/outline, /api/thesis, /api/literature-review — Generation endpoints."""
+import logging
 from datetime import datetime
 from typing import List, Any
 
@@ -13,6 +14,8 @@ import asyncio
 import concurrent.futures
 
 router = APIRouter()
+
+logger = logging.getLogger("cs599.mcp")
 
 
 def _format_error(e: Exception) -> str:
@@ -42,62 +45,168 @@ def _mcp_enhance(mcp_servers: List[str], topic: str) -> tuple:
     - sequential-thinking → 主题拆解 → 返回子问题列表
     """
     if not mcp_servers:
-        return "", []
+        return "", [], []
     logs = []
+    mcp_search_results = []
+    logger.info("🔌 MCP 增强搜索启动: servers=%s, topic=%s", mcp_servers, topic[:60])
     try:
         from src.mcp.manager import get_mcp_manager
         mgr = get_mcp_manager()
         snippets = []
 
         for srv_name in mcp_servers:
-            if not mgr.is_server_enabled(srv_name):
-                logs.append(f"  ⏭️ MCP {srv_name} 未启用，跳过")
+            # 自动初始化：如果预设存在但未添加，自动添加并启动
+            try:
+                from src.mcp.manager import BUILTIN_MCP_PRESETS
+                if not mgr.is_server_enabled(srv_name):
+                    if srv_name in BUILTIN_MCP_PRESETS:
+                        preset = BUILTIN_MCP_PRESETS[srv_name]
+                        msg = f"⚙️ MCP {srv_name} 首次使用，自动注册..."
+                        logs.append(f"  {msg}")
+                        logger.info("MCP %s", msg)
+                        ok, msg2 = mgr.add_from_preset(srv_name)
+                        logs.append(f"  ⚙️   → 注册: {msg2}")
+                        logger.info("MCP %s → 注册: %s", srv_name, msg2)
+                        if preset.server_type == "stdio":
+                            ok3, msg3 = mgr.start_stdio_server(srv_name)
+                            logs.append(f"  ⚙️   → 启动: {msg3}")
+                            logger.info("MCP %s → 启动: %s", srv_name, msg3)
+                    else:
+                        logs.append(f"  ⏭️ MCP {srv_name} 预设不存在，跳过")
+                        logger.warning("MCP %s 预设不存在，跳过", srv_name)
+                        continue
+                elif mgr.get_server(srv_name) and \
+                     mgr.get_server(srv_name).server_type == "stdio" and \
+                     not mgr.is_stdio_running(srv_name):
+                    ok3, msg3 = mgr.start_stdio_server(srv_name)
+                    logs.append(f"  🔄 MCP {srv_name} 重启: {msg3}")
+                    logger.info("MCP %s 重启: %s", srv_name, msg3)
+            except Exception as e:
+                logs.append(f"  ⚠️ MCP {srv_name} 初始化异常: {str(e)[:100]}")
+                logger.warning("MCP %s 初始化异常: %s", srv_name, e)
                 continue
 
             logs.append(f"🔌 正在调用 MCP 服务器: {srv_name}")
+            logger.info("🔌 正在调用 MCP 服务器: %s", srv_name)
 
             try:
                 if "fetch" in srv_name:
-                    # arxiv API 搜索
-                    fetch_url = f"https://export.arxiv.org/api/query?search_query=all:{topic}&max_results=3&sortBy=relevance&sortOrder=descending"
-                    r = mgr.call_tool(srv_name, "fetch", {"url": fetch_url})
-                    papers = _parse_arxiv_xml(r)
-                    for p in papers:
-                        snippets.append(f"[arxiv] {p}")
-                    logs.append(f"  ✅ MCP fetch → arxiv: {len(papers)} 篇论文")
+                    # arxiv 需要英文关键词，中文主题先用 LLM 生成多个短关键词
+                    arxiv_queries = [topic]
+                    if any('\u4e00' <= c <= '\u9fff' for c in topic):
+                        try:
+                            from src.models.manager import get_model_manager
+                            from src.api.dependencies import resolve_provider_model
+                            p, m = resolve_provider_model()
+                            llm = get_model_manager().create_llm_client(p, m, 0.1)
+                            resp = llm.invoke([{"role": "user", "content":
+                                f"将以下研究主题提炼为3个简短的英文关键词组合，每行一个，"
+                                f"每行不超过6个词，用于搜索学术论文：{topic}"}])
+                            lines = [l.strip() for l in resp.content.strip().split("\n") if l.strip()] if hasattr(resp, "content") else [topic]
+                            arxiv_queries = [l for l in lines if len(l) > 5][:3]
+                            logger.info("MCP arxiv 关键词: %r", arxiv_queries)
+                            logs.append(f"  🔍 arxiv 关键词: {arxiv_queries}")
+                        except Exception as e:
+                            logs.append(f"  ⚠️ arxiv 关键词生成失败: {type(e).__name__}: {str(e)[:100]}")
+                            logger.warning("arxiv 关键词生成失败: %s", e)
+                    # 用多个关键词分别搜索，合并结果去重
+                    import urllib.parse as _up
+                    import time as _time
+                    seen_titles = set()
+                    for aq_idx, aq in enumerate(arxiv_queries[:2]):  # 最多 2 个关键词，避免限流
+                        # arxiv 限流：关键词之间至少间隔 5 秒
+                        if aq_idx > 0:
+                            _time.sleep(5)
+                        # ★ R7: 跳过含中文的关键词（arxiv 不支持）
+                        if any('\u4e00' <= c <= '\u9fff' for c in aq):
+                            logs.append(f"  ⏭️ 跳过含中文关键词: {aq}")
+                            continue
+                        try:
+                            encoded = _up.quote(aq, safe="")
+                            fetch_url = f"https://export.arxiv.org/api/query?search_query=all:{encoded}&max_results=3&sortBy=relevance&sortOrder=descending"
+                            r = mgr.call_tool(srv_name, "fetch", {"url": fetch_url})
+                            if not r or "error" in r:
+                                err_msg = r.get("error", "unknown") if r else "no response"
+                                logs.append(f"  ⚠️ MCP fetch arxiv error ({aq}): {err_msg}")
+                                logger.warning("MCP fetch arxiv error (%s): %s", aq, err_msg)
+                                continue
+                            papers = _parse_arxiv_xml(r)
+                            for p in papers:
+                                title = p.split(".")[0] if "." in p else p[:50]
+                                if title not in seen_titles:
+                                    seen_titles.add(title)
+                                    snippets.append(f"[arxiv] {p}")
+                            # 结构化数据
+                            structured = _parse_arxiv_structured(r)
+                            for s in structured:
+                                if s["title"] not in seen_titles:
+                                    seen_titles.add(s["title"])
+                                    mcp_search_results.append(s)
+                        except Exception as e:
+                            logs.append(f"  ⚠️ MCP fetch arxiv 异常 ({aq}): {type(e).__name__}: {str(e)[:100]}")
+                            logger.warning("MCP fetch arxiv 异常 (%s): %s", aq, e)
+                    logs.append(f"  ✅ MCP fetch → arxiv: {len(seen_titles)} 篇论文 (去重)")
+                    logger.info("MCP fetch → arxiv: %d 篇论文 (去重, queries=%d)", len(seen_titles), len(arxiv_queries))
 
                 elif "filesystem" in srv_name:
-                    # 扫本地产物目录
-                    r = mgr.call_tool(srv_name, "list_directory", {"path": "./research_outputs"})
-                    raw = r.get("result", r.get("raw", ""))
-                    items = raw if isinstance(raw, list) else []
-                    matching = [item for item in items if isinstance(item, str) and topic.lower() in item.lower()]
-                    for item in matching[:5]:
-                        snippets.append(f"[本地文件] {item}")
-                    logs.append(f"  ✅ MCP filesystem: 扫描到 {len(matching)} 个相关文件")
+                    import os as _os
+                    _project_root = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.dirname(__file__))))
+                    fs_path = _os.path.join(_os.path.abspath(_project_root), "research_outputs")
+                    # ★ R4: 更新 allowed_dir 并重启 server 使配置生效
+                    mgr.update(srv_name, url=fs_path)
+                    mgr.stop_stdio_server(srv_name)
+                    mgr.start_stdio_server(srv_name)
+                    # ★ R8: 参数名兼容新版（directory）和旧版（path）
+                    r = mgr.call_tool(srv_name, "list_directory", {"directory": fs_path, "path": fs_path})
+                    if not r or "error" in r:
+                        err_msg = r.get("error", "unknown") if r else "no response"
+                        logs.append(f"  ⚠️ MCP filesystem error: {err_msg}")
+                        logger.warning("MCP filesystem error: %s", err_msg)
+                    else:
+                        raw = r.get("result", r.get("raw", ""))
+                        items = raw if isinstance(raw, list) else []
+                        matching = [item for item in items if isinstance(item, str) and topic.lower() in item.lower()]
+                        for item in matching[:5]:
+                            snippets.append(f"[本地文件] {item}")
+                        logs.append(f"  ✅ MCP filesystem: 扫描到 {len(matching)} 个相关文件")
+                        logger.info("MCP filesystem: 扫描到 %d 个相关文件", len(matching))
 
                 elif "memory" in srv_name:
-                    # 查历史知识图谱
                     r = mgr.call_tool(srv_name, "search_nodes", {"query": topic})
-                    raw = r.get("result", r.get("raw", ""))
-                    if isinstance(raw, dict) and raw.get("entities"):
-                        for ent in raw["entities"][:3]:
-                            name = ent.get("name", "")
-                            obs = "; ".join(ent.get("observations", [])[:2])
-                            snippets.append(f"[记忆] {name}: {obs[:200]}")
-                    logs.append(f"  ✅ MCP memory: 查询知识图谱完成")
+                    if not r or "error" in r:
+                        err_msg = r.get("error", "unknown") if r else "no response"
+                        logs.append(f"  ⚠️ MCP memory error: {err_msg}")
+                        logger.warning("MCP memory error: %s", err_msg)
+                    else:
+                        raw = r.get("result", r.get("raw", ""))
+                        if isinstance(raw, dict) and raw.get("entities"):
+                            for ent in raw["entities"][:3]:
+                                name = ent.get("name", "")
+                                obs = "; ".join(ent.get("observations", [])[:2])
+                                snippets.append(f"[记忆] {name}: {obs[:200]}")
+                        logs.append(f"  ✅ MCP memory: 查询知识图谱完成")
+                        logger.info("MCP memory: 查询知识图谱完成")
 
                 elif "sequential" in srv_name:
-                    # 分步推理
-                    r = mgr.call_tool(srv_name, "sequentialthinking",
-                                      {"thought": f"Research topic: {topic}. Break down into sub-questions."})
-                    raw = r.get("result", r.get("raw", ""))
-                    if isinstance(raw, dict) and raw.get("thought"):
-                        snippets.append(f"[推理] {raw['thought'][:300]}")
-                    logs.append(f"  ✅ MCP sequential-thinking: 推理完成")
+                    # ★ R5: 补齐必填参数
+                    r = mgr.call_tool(srv_name, "sequentialthinking", {
+                        "thought": f"Research topic: {topic}. Break down into sub-questions.",
+                        "thoughtNumber": 1,
+                        "totalThoughts": 3,
+                        "nextThoughtNeeded": True,
+                    })
+                    if not r or "error" in r:
+                        err_msg = r.get("error", "unknown") if r else "no response"
+                        logs.append(f"  ⚠️ MCP sequential-thinking error: {err_msg}")
+                        logger.warning("MCP sequential-thinking error: %s", err_msg)
+                    else:
+                        raw = r.get("result", r.get("raw", ""))
+                        if isinstance(raw, dict) and raw.get("thought"):
+                            snippets.append(f"[推理] {raw['thought'][:300]}")
+                        logs.append(f"  ✅ MCP sequential-thinking: 推理完成")
+                        logger.info("MCP sequential-thinking: 推理完成")
 
                 else:
-                    # 通用 fallback：调 search 工具
                     r = mgr.call_tool(srv_name, "search", {"query": topic, "max_results": 3})
                     if "error" not in r:
                         parsed = r.get("result", r.get("raw", []))
@@ -113,16 +222,17 @@ def _mcp_enhance(mcp_servers: List[str], topic: str) -> tuple:
 
             except Exception as e:
                 logs.append(f"  ⚠️ MCP {srv_name} 异常: {str(e)[:100]}")
-                pass
+                logger.warning("MCP %s 调用异常: %s", srv_name, e)
 
         context = "\nMCP搜索结果：\n" + "\n".join(snippets[:10]) if snippets else ""
-        return context, logs
+        return context, logs, mcp_search_results
     except Exception as e:
-        return "", [f"❌ MCP 管理器错误: {str(e)[:100]}"]
+        logger.warning("MCP 增强搜索异常: %s", e)
+        return "", [f"❌ MCP 管理器错误: {str(e)[:100]}"], []
 
 
 def _parse_arxiv_xml(raw: Any) -> List[str]:
-    """解析 arxiv Atom XML 响应 → 论文摘要列表。"""
+    """解析 arxiv Atom XML → 人类可读的引用文本。"""
     try:
         import xml.etree.ElementTree as ET
         result = raw.get("result", "") if isinstance(raw, dict) else str(raw)
@@ -131,10 +241,48 @@ def _parse_arxiv_xml(raw: Any) -> List[str]:
         papers = []
         for entry in root.findall("atom:entry", ns):
             title = entry.findtext("atom:title", "", ns).strip().replace("\n", " ").replace("  ", " ")
-            summary = entry.findtext("atom:summary", "", ns).strip()[:300].replace("\n", " ")
             link = entry.findtext("atom:id", "", ns)
-            published = entry.findtext("atom:published", "", ns)[:10]
-            papers.append(f"{title} ({published}) - {summary[:150]}... | {link}")
+            published = entry.findtext("atom:published", "", ns)[:4]
+            authors = []
+            for author in entry.findall("atom:author", ns):
+                name = author.findtext("atom:name", "", ns)
+                if name:
+                    authors.append(name.strip())
+            author_str = ", ".join(authors[:3])
+            if len(authors) > 3:
+                author_str += " et al."
+            papers.append(f"{author_str} ({published}). \"{title}.\" arXiv preprint. {link}")
+        return papers
+    except Exception:
+        return []
+
+
+def _parse_arxiv_structured(raw: Any) -> List[dict]:
+    """解析 arxiv Atom XML → SearchResult 结构体（用于论文评估管道）。"""
+    try:
+        import xml.etree.ElementTree as ET
+        result = raw.get("result", "") if isinstance(raw, dict) else str(raw)
+        root = ET.fromstring(result)
+        ns = {"atom": "http://www.w3.org/2005/Atom"}
+        papers = []
+        for entry in root.findall("atom:entry", ns):
+            title = entry.findtext("atom:title", "", ns).strip().replace("\n", " ").replace("  ", " ")
+            summary = entry.findtext("atom:summary", "", ns).strip()[:500].replace("\n", " ")
+            link = entry.findtext("atom:id", "", ns)
+            published = entry.findtext("atom:published", "", ns)[:4]
+            authors = []
+            for author in entry.findall("atom:author", ns):
+                name = author.findtext("atom:name", "", ns)
+                if name:
+                    authors.append(name.strip())
+            papers.append({
+                "title": title,
+                "url": link,
+                "snippet": summary,
+                "source": "arxiv",
+                "year": int(published) if published.isdigit() else 0,
+                "authors": authors,
+            })
         return papers
     except Exception:
         return []
@@ -216,7 +364,7 @@ async def report(req: ReportRequest, request: Request):
 
         mcp_ctx = ""
         if req.mcp_servers:
-            mcp_ctx, mcp_logs = _mcp_enhance(req.mcp_servers, req.subject)
+            mcp_ctx, mcp_logs, mcp_arxiv = _mcp_enhance(req.mcp_servers, req.subject)
             logs.extend(mcp_logs)
 
         context = req.context or req.field
@@ -230,6 +378,7 @@ async def report(req: ReportRequest, request: Request):
             "context": context or req.field,
             "reference_count": req.referenceCount,
             "include_charts": req.includeCharts,
+            "mcp_search_results": mcp_arxiv,
             "request_id": req.request_id,
         }, timeout=600, user_id=user_id)
         logs.append("报告生成完成！")
@@ -267,11 +416,13 @@ async def outline(req: OutlineRequest, request: Request):
         # MCP 预搜索
         mcp_ctx = ""
         if req.mcp_servers:
-            mcp_ctx, mcp_logs = _mcp_enhance(req.mcp_servers, req.subject)
+            mcp_ctx, mcp_logs, mcp_arxiv = _mcp_enhance(req.mcp_servers, req.subject)
             logs.extend(mcp_logs)
+            if mcp_arxiv:
+                req.mcp_search_results = mcp_arxiv
 
         ctx = SkillContext(topic=req.subject, provider_name=provider, model_id=model,
-                           custom_params={"depth": 2, "sources": ["web", "semantic_scholar"], "context": (req.context or req.field or "") + mcp_ctx, "request_id": req.request_id},
+                           custom_params={"depth": 2, "sources": ["web", "semantic_scholar"], "context": (req.context or req.field or "") + mcp_ctx, "request_id": req.request_id, "mcp_search_results": getattr(req, "mcp_search_results", [])},
                            user_id=user_id)
         research_result = get_skill_registry().execute(actual, ctx)
         logs.append("调研完成，正在生成大纲...")
@@ -321,7 +472,7 @@ async def thesis(req: ThesisRequest, request: Request):
         # MCP 预搜索
         mcp_ctx = ""
         if req.mcp_servers:
-            mcp_ctx, mcp_logs = _mcp_enhance(req.mcp_servers, req.blockTitle)
+            mcp_ctx, mcp_logs, mcp_arxiv = _mcp_enhance(req.mcp_servers, req.blockTitle)
             logs.extend(mcp_logs)
 
         combined_context = req.prompt + ("\n" + req.context if req.context else "") + ("\n" + mcp_ctx if mcp_ctx else "")
@@ -331,6 +482,7 @@ async def thesis(req: ThesisRequest, request: Request):
             "length": req.length or "medium",
             "sections": sections,
             "context": combined_context,
+            "mcp_search_results": mcp_arxiv,
             "request_id": req.request_id,
         }, timeout=600, user_id=user_id)
         logs.append("学术段落生成完成！")
@@ -358,7 +510,7 @@ async def literature_review(req: ReviewRequest, request: Request):
         # MCP 预搜索
         mcp_ctx = ""
         if req.mcp_servers:
-            mcp_ctx, mcp_logs = _mcp_enhance(req.mcp_servers, req.keyword)
+            mcp_ctx, mcp_logs, mcp_arxiv = _mcp_enhance(req.mcp_servers, req.keyword)
             logs.extend(mcp_logs)
 
         combined_context = (req.context or "") + ("\n" + mcp_ctx if mcp_ctx else "")
@@ -367,6 +519,7 @@ async def literature_review(req: ReviewRequest, request: Request):
             "taxonomy": req.taxonomy,
             "comparisons": req.comparisons,
             "context": combined_context,
+            "mcp_search_results": mcp_arxiv,
             "request_id": req.request_id,
         }, timeout=600, user_id=user_id)
         logs.append("文献综述合成完成！")

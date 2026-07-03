@@ -661,7 +661,8 @@ export default function App() {
           prompt: assistantPrompt,
           context: contextText,
           provider: selectedProvider,
-          model: selectedModel
+          model: selectedModel,
+          mcp_servers: selectedMcpServers,
         };
         break;
       case "report":
@@ -689,6 +690,7 @@ export default function App() {
           paper_type: outlinePaperType,
           context: outlineContext,
           skill_override: skillOverride,
+          mcp_servers: selectedMcpServers,
           provider: selectedProvider,
           model: selectedModel
         };
@@ -704,6 +706,7 @@ export default function App() {
           length: thesisLength,
           context: thesisContext,
           skill_override: skillOverride,
+          mcp_servers: selectedMcpServers,
           provider: selectedProvider,
           model: selectedModel
         };
@@ -719,6 +722,7 @@ export default function App() {
           comparisons: reviewComparisons,
           context: reviewContext,
           skill_override: skillOverride,
+          mcp_servers: selectedMcpServers,
           provider: selectedProvider,
           model: selectedModel
         };
@@ -732,6 +736,7 @@ export default function App() {
           iterations: agentIterations,
           context: agentContext,
           skill_override: skillOverride,
+          mcp_servers: selectedMcpServers,
           provider: selectedProvider,
           model: selectedModel
         };
@@ -944,6 +949,41 @@ export default function App() {
 
     showToast(`载入快照: ${item.title}`);
   };
+
+  // ── MCP 增强搜索 checkbox 组（可复用） ──────────────────────────────
+  const renderMcpCheckboxes = () => (
+    <div className="border border-gray-200 rounded-2xl bg-white p-4 shadow-sm">
+      <div className="flex items-center gap-1.5 mb-2">
+        <span className="text-xs font-semibold text-gray-700">🔌 MCP 增强搜索</span>
+        <span className="text-[9px] text-gray-400">（免费，自动增强检索）</span>
+      </div>
+      <div className="space-y-1.5">
+        {[
+          { key: "fetch", label: "网页抓取 (fetch)", desc: "搜 arxiv 论文 + 网页" },
+          { key: "filesystem_stdio", label: "本地文件 (filesystem)", desc: "读本地论文 PDF" },
+          { key: "memory_stdio", label: "研究记忆 (memory)", desc: "跨会话知识图谱" },
+          { key: "sequential_thinking", label: "分步推理 (sequential)", desc: "查询优化 + 论文规划" },
+        ].map((mcp) => (
+          <label key={mcp.key} className="flex items-center gap-2 py-1 px-2 rounded-lg hover:bg-slate-50 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={selectedMcpServers.includes(mcp.key)}
+              onChange={(e) => {
+                if (e.target.checked) {
+                  setSelectedMcpServers([...selectedMcpServers, mcp.key]);
+                } else {
+                  setSelectedMcpServers(selectedMcpServers.filter((k) => k !== mcp.key));
+                }
+              }}
+              className="w-3.5 h-3.5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+            />
+            <span className="text-xs font-medium text-gray-700">{mcp.label}</span>
+            <span className="text-[10px] text-gray-400 ml-1">{mcp.desc}</span>
+          </label>
+        ))}
+      </div>
+    </div>
+  );
 
   return (
     <div id="cs599-outer-canvas" className="flex h-screen w-full items-center justify-center bg-gradient-to-tr from-[#E2E8F0] via-[#F1F5F9] to-[#F8FAFC] p-0 text-slate-800 font-sans overflow-hidden antialiased">
@@ -1283,6 +1323,9 @@ export default function App() {
                     </select>
                   </div>
 
+                  {/* MCP 增强搜索 */}
+                  {renderMcpCheckboxes()}
+
                   {/* Trigger buttons */}
                   <div className="flex gap-3">
                     <button
@@ -1420,37 +1463,7 @@ export default function App() {
                     </div>
 
                     {/* MCP 增强搜索选择器 */}
-                    <div className="border-t border-gray-100 pt-3 mt-2">
-                      <div className="flex items-center gap-1.5 mb-2">
-                        <span className="text-xs font-semibold text-gray-700">🔌 MCP 增强搜索</span>
-                        <span className="text-[9px] text-gray-400">（免费，自动增强检索）</span>
-                      </div>
-                      <div className="space-y-1.5">
-                        {[
-                          { key: "fetch", label: "网页抓取 (fetch)", desc: "搜 arxiv 论文 + 网页" },
-                          { key: "filesystem_stdio", label: "本地文件 (filesystem)", desc: "读本地论文 PDF" },
-                          { key: "memory_stdio", label: "研究记忆 (memory)", desc: "跨会话知识图谱" },
-                          { key: "sequential_thinking", label: "分步推理 (sequential)", desc: "查询优化 + 论文规划" },
-                        ].map((mcp) => (
-                          <label key={mcp.key} className="flex items-center gap-2 py-1 px-2 rounded-lg hover:bg-slate-50 cursor-pointer">
-                            <input
-                              type="checkbox"
-                              checked={selectedMcpServers.includes(mcp.key)}
-                              onChange={(e) => {
-                                if (e.target.checked) {
-                                  setSelectedMcpServers([...selectedMcpServers, mcp.key]);
-                                } else {
-                                  setSelectedMcpServers(selectedMcpServers.filter((k) => k !== mcp.key));
-                                }
-                              }}
-                              className="w-3.5 h-3.5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
-                            />
-                            <span className="text-xs font-medium text-gray-700">{mcp.label}</span>
-                            <span className="text-[10px] text-gray-400 ml-1">{mcp.desc}</span>
-                          </label>
-                        ))}
-                      </div>
-                    </div>
+                    {renderMcpCheckboxes()}
                   </div>
                 </div>
 
@@ -1545,6 +1558,9 @@ export default function App() {
                   </select>
                   <p className="text-[9px] text-gray-400 mt-1">选择特定技能覆盖默认的研究流程</p>
                 </div>
+
+                {/* MCP 增强搜索 */}
+                {renderMcpCheckboxes()}
 
                 <button
                   onClick={() => handleRunTask("outline")}
@@ -1646,6 +1662,9 @@ export default function App() {
                   <p className="text-[9px] text-gray-400 mt-1">选择特定技能覆盖默认的论文写作流程</p>
                 </div>
 
+                {/* MCP 增强搜索 */}
+                {renderMcpCheckboxes()}
+
                 <button
                   onClick={() => handleRunTask("thesis")}
                   disabled={isLoading}
@@ -1729,6 +1748,9 @@ export default function App() {
                   <p className="text-[9px] text-gray-400 mt-1">选择特定技能覆盖默认的综述流程</p>
                 </div>
 
+                {/* MCP 增强搜索 */}
+                {renderMcpCheckboxes()}
+
                 <button
                   onClick={() => handleRunTask("review")}
                   disabled={isLoading}
@@ -1795,6 +1817,9 @@ export default function App() {
                   </select>
                   <p className="text-[9px] text-gray-400 mt-1">选择特定技能覆盖默认的多智能体流程</p>
                 </div>
+
+                {/* MCP 增强搜索 */}
+                {renderMcpCheckboxes()}
 
                 <button
                   onClick={() => handleRunTask("agents")}

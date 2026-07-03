@@ -15,6 +15,7 @@ def merge_lists(left: Optional[list], right: Optional[list]) -> list:
 
 
 @dataclass
+@dataclass
 class SearchResult:
     """A single search result."""
     title: str

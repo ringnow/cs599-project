@@ -7,6 +7,8 @@ class AssistantRequest(BaseModel):
     context: str = ""
     provider: str = ""
     model: str = ""
+    mcp_servers: List[str] = []
+    mcp_search_results: List[dict] = []
     request_id: str = ""
 
 
@@ -71,6 +73,7 @@ class AgentCollaborateRequest(BaseModel):
     iterations: int = 1
     context: str = ""
     skill_override: str = ""
+    mcp_servers: List[str] = []
     provider: str = ""
     model: str = ""
     request_id: str = ""
